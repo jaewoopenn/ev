@@ -22,8 +22,8 @@ TOTAL_STATION_POWER = 4.8     # 제약 1: 전력 총량 (C)
 MAX_EV_POWER = 1.0            # 단일 차량 속도 한계
 MAX_SESSIONS = 6              # 제약 2: 세션(플러그) 수 (K)
 
-STRESS_START = 1
-STRESS_NUM = 10
+STRESS_START = 0
+STRESS_NUM = 11
 
 @dataclass
 class EVRequest:
