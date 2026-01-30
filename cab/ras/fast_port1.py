@@ -23,7 +23,7 @@ MAX_EV_POWER = 1.0            # 단일 차량 속도 한계
 MAX_SESSIONS = 6              # 제약 2: 세션(플러그) 수 (K)
 
 STRESS_START = 0
-STRESS_NUM = 11
+STRESS_NUM = 12
 
 @dataclass
 class EVRequest:

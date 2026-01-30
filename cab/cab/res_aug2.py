@@ -1,5 +1,5 @@
 '''
-Created on 2026. 1. 6. ㄴㅇㄴs
+Created on 2026. 1. 6. 
 
 @author: jaewoo
 '''

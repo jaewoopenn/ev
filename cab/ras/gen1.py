@@ -13,7 +13,7 @@ DATA_SAVE_PATH = "/Users/jaewoo/data/ev/cab/data"
 
 TRIAL_NUM = 350         # 레벨당 실험 횟수
 STRESS_START = 0        # 시작 혼잡도
-STRESS_NUM = 11         # 혼잡도 단계 수 (0~9)
+STRESS_NUM = 12         # 혼잡도 단계 수 (0~9)
 MAX_EV_POWER = 1.0      # 데이터 생성 시 필요한 상수
 
 @dataclass
