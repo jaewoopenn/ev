@@ -167,8 +167,8 @@ if __name__ == '__main__':
 
     # Plot
     plt.figure(figsize=(10, 6))
-    plt.plot(levels, ratios['EDF'], marker='o', label='EDF', linestyle=':', color='gray', alpha=0.5)
-    plt.plot(levels, ratios['LLF'], marker='s', label='LLF', linestyle='--', color='blue', alpha=0.5)
+    plt.plot(levels, ratios['EDF'], marker='o', label='fluid-EDF', linestyle=':', color='gray', alpha=0.5)
+    plt.plot(levels, ratios['LLF'], marker='s', label='fluid-LLF', linestyle='--', color='blue', alpha=0.5)
     plt.plot(levels, ratios['NEW_ALGO'], marker='^', label='NEW_ALGO', linestyle='-', color='green', linewidth=2)
     plt.plot(levels, ratios['sLLF'], marker='*', label='sLLF (Binary)', linestyle='-', color='red', linewidth=2)
     
