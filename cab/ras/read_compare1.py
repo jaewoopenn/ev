@@ -12,7 +12,8 @@ EPSILON = 1e-6
 TOTAL_STATION_POWER = 35.0   # 전체 충전소 용량 (kW)
 MAX_EV_POWER = 6.6           # 개별 EV 최대 충전 속도 (kW)
 MIN_CHARGING_RATE = 1.5      # [NEW] 최소 충전 속도 보장 제약 (kW)
-F_PATH='/users/jaewoo/data/acn/acn_data_1week.csv'
+# F_PATH='/users/jaewoo/data/acn/acn_data_1week.csv'
+F_PATH='/users/jaewoo/data/acn/acn_data_caltech_20191001_20191031.csv'
 
 @dataclass
 class EVRequest:
