@@ -14,10 +14,13 @@ import ras.fast_port_def3 as port
 # 경로 설정 (사용자 환경에 맞게 수정)
 DATA_SAVE_PATH = "/Users/jaewoo/data/ev/cab/data" 
 FIG_PATH = "/Users/jaewoo/data/ev/cab/result.png" 
+NAME_NEW_ALGO='Q-FAS'
+
 
 TRIAL_NUM = 100
 TIME_STEP = 1
 EPSILON = 1e-6
+
 
 # [환경 제약: 최소 충전 속도 보장]
 TOTAL_STATION_POWER = 4.8     # 총 전력량 (C)
@@ -218,7 +221,7 @@ if __name__ == '__main__':
         plt.figure(figsize=(10, 6))
         plt.plot(levels, ratios['EDF'], marker='o', label='EDF', linestyle=':', color='gray', alpha=0.5)
         plt.plot(levels, ratios['LLF'], marker='s', label='LLF', linestyle='--', color='blue', alpha=0.5)
-        plt.plot(levels, ratios['S-RAS'], marker='^', label='S-RAS', linestyle='-', color='green', linewidth=2)
+        plt.plot(levels, ratios['S-RAS'], marker='^', label=NAME_NEW_ALGO, linestyle='-', color='green', linewidth=2)
         
         plt.title(f'Feasibility under Min Charging Rate ({MIN_CHARGING_RATE}kW)')
         plt.xlabel('Stress Level')

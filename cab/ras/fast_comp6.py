@@ -12,6 +12,7 @@ from multiprocessing import Pool, cpu_count
 # ---------------------------------------------------------
 DATA_SAVE_PATH = "/Users/jaewoo/data/ev/cab/data"
 FIG_PATH = "/Users/jaewoo/data/ev/cab/result_0.png" 
+NAME_NEW_ALGO='Q-FAS'
 
 TRIAL_NUM = 100
 TIME_STEP = 1
@@ -24,6 +25,7 @@ MAX_EV_POWER = 1.0            # 단일 차량 최대 속도
 # 시뮬레이션 레벨 설정
 STRESS_START = 2
 STRESS_NUM = 11
+
 
 @dataclass
 class EVRequest:
@@ -342,7 +344,7 @@ if __name__ == '__main__':
         plt.figure(figsize=(10, 6))
         plt.plot(congestion_levels, ratios['EDF'], marker='o', label='EDF', linestyle=':', color='gray', alpha=0.5)
         plt.plot(congestion_levels, ratios['LLF'], marker='s', label='LLF', linestyle='--', color='blue', alpha=0.5)
-        plt.plot(congestion_levels, ratios['NEW_ALGO'], marker='^', label='S-RAS', linestyle='-', color='green', linewidth=2)
+        plt.plot(congestion_levels, ratios['NEW_ALGO'], marker='^', label=NAME_NEW_ALGO, linestyle='-', color='green', linewidth=2)
         plt.plot(congestion_levels, ratios['sLLF'], marker='*', label='sLLF', linestyle='-', color='red', linewidth=2)
 
         plt.title('Algorithm Performance Comparison (No Min Rate)', fontsize=14)

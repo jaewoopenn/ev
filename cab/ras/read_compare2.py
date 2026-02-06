@@ -299,7 +299,7 @@ def run_simulation(ev_set: List[EVRequest], algorithm: str) -> float:
         allocated_powers = []
         if algorithm == 'sLLF':
             allocated_powers = calculate_sllf_power(current_time, active_evs, TOTAL_STATION_POWER, MAX_EV_POWER, TIME_STEP)
-        elif algorithm == 'S-RAS':
+        elif algorithm == 'Q-FAS':
             allocated_powers = calculate_sras_power(current_time, active_evs, TOTAL_STATION_POWER, MAX_EV_POWER, MIN_CHARGING_RATE, TIME_STEP)
         elif algorithm in ['EDF', 'LLF']:
             allocated_powers = calculate_greedy_allocation(active_evs, TOTAL_STATION_POWER, MIN_CHARGING_RATE, MAX_EV_POWER, TIME_STEP, mode=algorithm)
@@ -343,9 +343,9 @@ else:
 
     algorithms = []
     if MIN_CHARGING_RATE <= EPSILON:
-        algorithms = ['EDF', 'LLF', 'sLLF', 'S-RAS']
+        algorithms = ['EDF', 'LLF', 'sLLF', 'Q-FAS']
     else:
-        algorithms = ['EDF', 'LLF', 'S-RAS']
+        algorithms = ['EDF', 'LLF', 'Q-FAS']
         
     results = {}
 
@@ -356,7 +356,7 @@ else:
         print(f"-> {score:.2f}%")
 
     plt.figure(figsize=(10, 6))
-    bar_colors = {'EDF':'gray', 'LLF':'blue', 'sLLF':'red', 'S-RAS':'green'}
+    bar_colors = {'EDF':'gray', 'LLF':'blue', 'sLLF':'red', 'Q-FAS':'green'}
     colors = [bar_colors[algo] for algo in algorithms]
 
     bars = plt.bar(results.keys(), results.values(), color=colors, alpha=0.8)
