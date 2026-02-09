@@ -3,7 +3,6 @@ import random
 import math
 import pickle
 from dataclasses import dataclass
-from typing import List
 
 # ---------------------------------------------------------
 # 1. 설정 및 상수
