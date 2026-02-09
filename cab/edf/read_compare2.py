@@ -11,7 +11,6 @@ TIME_STEP = 0.1              # 시뮬레이션 시간 단위 (0.1시간 = 6분)
 EPSILON = 1e-6               # 부동소수점 오차 처리용 상수
 TOTAL_STATION_POWER = 35   # 전체 충전소 전력 용량 (kW) - 혼잡 상황 유도를 위해 제한
 MAX_EV_POWER = 6.6          # 개별 전기차 최대 충전 속도 (kW)
-# F_PATH='/users/jaewoo/data/acn/acn_data_caltech_20190901_20191001.csv'
 F_PATH='/users/jaewoo/data/acn/acn_data_1week.csv'
 
 

@@ -3,9 +3,8 @@ import pickle
 import copy
 import time
 import matplotlib.pyplot as plt
-import math
 from dataclasses import dataclass
-from typing import List, Dict, Tuple
+from typing import List
 from multiprocessing import Pool, cpu_count
 import ras.fast_port_def2 as port
 
@@ -15,6 +14,7 @@ import ras.fast_port_def2 as port
 # ---------------------------------------------------------
 # 경로 설정 (사용자 환경에 맞게 수정)
 DATA_SAVE_PATH = "/Users/jaewoo/data/ev/cab/data" 
+FIG_PATH = "/Users/jaewoo/data/ev/cab/result.png" 
 
 TRIAL_NUM = 100
 TIME_STEP = 1
@@ -226,8 +226,8 @@ if __name__ == '__main__':
         plt.figure(figsize=(10, 6))
         plt.plot(levels, ratios['EDF'], marker='o', label='EDF', linestyle=':', color='gray', alpha=0.5)
         plt.plot(levels, ratios['LLF'], marker='s', label='LLF', linestyle='--', color='blue', alpha=0.5)
-        plt.plot(levels, ratios['sLLF'], marker='*', label='sLLF (MinRate)', linestyle='-', color='red', linewidth=2)
-        plt.plot(levels, ratios['NEW_ALGO'], marker='^', label='Proposed (S-RAS)', linestyle='-', color='green', linewidth=2)
+        plt.plot(levels, ratios['sLLF'], marker='*', label='sLLF', linestyle='-', color='red', linewidth=2)
+        plt.plot(levels, ratios['NEW_ALGO'], marker='^', label='S-RAS', linestyle='-', color='green', linewidth=2)
         
         plt.title(f'Feasibility under Min Charging Rate ({MIN_CHARGING_RATE}kW)')
         plt.xlabel('Stress Level')
@@ -236,5 +236,6 @@ if __name__ == '__main__':
         plt.grid(True, alpha=0.3)
         plt.ylim(-0.05, 1.05)
         plt.show()
+        # plt.savefig(FIG_PATH)
     else:
         print("No data to plot.")

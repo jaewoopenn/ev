@@ -16,11 +16,15 @@ TRIAL_NUM = 100
 TIME_STEP = 1
 EPSILON = 1e-6
 
-TOTAL_STATION_POWER = 4
-MAX_EV_POWER = 1.0
+# [환경 제약: 최소 충전 속도 보장]
+TOTAL_STATION_POWER = 4.8     # 총 전력량 (C)
+MAX_EV_POWER = 1.0            # 단일 차량 최대 속도
 
-STRESS_START = 0
-STRESS_NUM = 10
+# 시뮬레이션 레벨 설정
+STRESS_START = 2
+STRESS_NUM = 11
+
+
 
 @dataclass
 class EVRequest:
