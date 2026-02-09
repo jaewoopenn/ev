@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import List
 
 # ---------------------------------------------------------
-# 1. 설정 및 상수
+# 1. 설정 및 상수  sss
 # ---------------------------------------------------------
 DATA_SAVE_PATH = "/Users/jaewoo/data/ev/cab/data"
 
