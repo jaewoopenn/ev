@@ -97,199 +97,69 @@ def calculate_sllf_power(current_time, active_evs, grid_capacity, max_ev_power, 
         
     return best_allocations
 
+
 def calculate_fluid_edf_zl_power(current_time, ready_evs, grid_capacity, max_ev_power, min_ev_power, time_step):
     """
-    Fluid-EDF with ZL (Zero-Laxity) Policy
-    - Phase 1: ZL (Zero-Laxity) 차량 검출 및 최우선 할당
-    - Phase 2: 남은 차량에 대해 Fluid Rate 기반 할당 (I_min 보장)
-    - Phase 3: 잉여 전력(Surplus) 가속
+    [Laxity-Guided Fluid (LGF) 알고리즘]
+    S-RAS의 미래 병목 예방 효과를 O(N log N) 시간 복잡도로 빠르게 모사합니다.
     """
     if not ready_evs: return []
-
+    
     allocations = {ev.ev_id: 0.0 for ev in ready_evs}
     surplus = grid_capacity
     
-    zl_evs = []
-    normal_evs = []
+    ev_metrics = []
     
-    # -----------------------------------------------------
-    # Phase 1: Laxity 계산 및 ZL 상태 분류
-    # -----------------------------------------------------
+    # 1. 모든 차량의 Fluid Rate와 Laxity 계산
     for ev in ready_evs:
         time_to_deadline = ev.deadline - current_time
-        # 최대 속도로 충전 시 필요한 최소 시간
-        time_needed = ev.remaining / max_ev_power 
+        max_req = min(max_ev_power, ev.remaining / time_step)
         
-        # 여유 시간 (Laxity)
-        laxity = time_to_deadline - time_needed
-        
-        # 여유 시간이 다음 타임스텝 이내이거나 0보다 작으면 ZL로 간주
-        if laxity <= time_step + EPSILON:
-            zl_evs.append(ev)
+        if time_to_deadline <= EPSILON:
+            fluid_rate = max_req
+            laxity = -float('inf') # 초긴급 상태
         else:
-            normal_evs.append(ev)
+            # 남은 시간 동안 꾸준히 충전해야 할 평균 속도
+            fluid_rate = ev.remaining / time_to_deadline
+            # 여유 시간
+            laxity = time_to_deadline - (ev.remaining / max_ev_power)
             
-    # ZL 차량 최우선 할당 (이 중에서도 데드라인이 급한 순)
-    zl_evs.sort(key=lambda x: x.deadline)
-    for ev in zl_evs:
-        if surplus <= EPSILON: break
+        # 물리적 한계치로 Fluid Rate 상하한 고정
+        fluid_rate = max(0.0, min(fluid_rate, max_req))
         
-        # 데드라인을 맞추기 위해 필요한 물리적 한계치 요구량
-        req_power = min(max_ev_power, ev.remaining / time_step)
-        alloc = min(surplus, req_power)
+        ev_metrics.append({
+            'ev_id': ev.ev_id,
+            'laxity': laxity,
+            'fluid_rate': fluid_rate,
+            'max_req': max_req
+        })
         
-        allocations[ev.ev_id] = alloc
-        surplus -= alloc
-        
-    # -----------------------------------------------------
-    # Phase 2: 일반 차량에 대한 Fluid-EDF 할당
-    # -----------------------------------------------------
-    normal_evs.sort(key=lambda x: x.deadline)
+    # 2. 정렬: Laxity가 가장 작은(위험한) 순서대로 정렬 
+    # (Laxity가 같다면 Fluid Rate가 더 많이 필요한 차량 우선)
+    ev_metrics.sort(key=lambda x: (x['laxity'], -x['fluid_rate']))
     
-    for ev in normal_evs:
+    # 3. Phase 1 (기본 보장): 긴급한 차량부터 1순위로 Fluid Rate만큼 전력 할당
+    for item in ev_metrics:
         if surplus <= EPSILON: break
-        time_to_deadline = ev.deadline - current_time
-        
-        # Fluid Rate: 남은 시간 동안 필요한 균등 충전 속도
-        fluid_rate = ev.remaining / time_to_deadline if time_to_deadline > EPSILON else max_ev_power
-        
-        # 하한(I_min)과 상한(물리적 한계) 적용
-        desired_rate = max(fluid_rate, min_ev_power)
-        desired_rate = min(desired_rate, max_ev_power, ev.remaining / time_step)
-        
-        # 남은 전력 내에서 할당
-        if surplus >= desired_rate - EPSILON:
-            alloc = desired_rate
-        else:
-            # 남은 전력이 I_min보다 적으면 할당 포기 (I_min 제약)
-            alloc = surplus if surplus >= min_ev_power else 0.0
-            
-        allocations[ev.ev_id] = alloc
+        alloc = min(surplus, item['fluid_rate'])
+        allocations[item['ev_id']] = alloc
         surplus -= alloc
         
-    # -----------------------------------------------------
-    # Phase 3: 잉여 전력 분배 (Surplus Filling)
-    # -----------------------------------------------------
+    # 4. Phase 2 (잉여 가속): 전력이 남았다면 긴급한 차량 순서대로 최대 한계치까지 전력 몰아주기
     if surplus > EPSILON:
-        for ev in normal_evs:
+        for item in ev_metrics:
             if surplus <= EPSILON: break
-            
-            current_alloc = allocations[ev.ev_id]
-            max_req = min(max_ev_power, ev.remaining / time_step)
-            room = max_req - current_alloc
+            ev_id = item['ev_id']
+            current_alloc = allocations[ev_id]
+            room = item['max_req'] - current_alloc
             
             if room > EPSILON:
                 add = min(surplus, room)
-                allocations[ev.ev_id] += add
+                allocations[ev_id] += add
                 surplus -= add
-
+                
     return [allocations[ev.ev_id] for ev in ready_evs]
 
-def calculate_sras_power(current_time, active_evs, grid_capacity, max_ev_power, time_step):
-    """
-    [S-RAS 구현 - I_min=0 버전]
-    Source: robust_r_min.docx
-    
-    1. Analysis Phase: Backward Analysis로 Must-Run Load (Mi) 계산
-    2. Execution Phase:
-       - Tier 1: Mi 할당 (I_min=0이므로 Mi 그대로 할당)
-       - Tier 2: 남은 자원(S)을 EDF 순서로 가속(Speed Up)
-    """
-    if not active_evs: return []
-
-    # -----------------------------------------------------
-    # Phase 1: Backward Analysis for Must-Run Load (Mi)
-    # -----------------------------------------------------
-    # 1-1. 시간축 구간화 (Event-based Discretization)
-    segments = []
-    first_seg_end = current_time + time_step
-    
-    # 첫 번째 구간 [t, t+1]: 여기서 할당된 양이 곧 Mi
-    segments.append({
-        "start": current_time, 
-        "end": first_seg_end, 
-        "capacity": grid_capacity * time_step, 
-        "index": 0 
-    })
-    
-    # 미래 데드라인 구간들
-    deadlines = sorted(list(set(ev.deadline for ev in active_evs)))
-    deadlines = [d for d in deadlines if d > first_seg_end]
-    
-    start_t = first_seg_end
-    for d in deadlines:
-        segments.append({
-            "start": start_t, 
-            "end": d, 
-            "capacity": grid_capacity * (d - start_t), 
-            "index": 1 # Future
-        })
-        start_t = d
-
-    # 1-2. 역방향 채우기 (Backward Filling)
-    must_run_load = {ev.ev_id: 0.0 for ev in active_evs}
-    
-    # 데드라인이 늦은 차량부터 역순으로 채움
-    sorted_evs_backward = sorted(active_evs, key=lambda x: x.deadline, reverse=True)
-    temp_segments = copy.deepcopy(segments)
-    
-    for ev in sorted_evs_backward:
-        energy_needed = ev.remaining
-        
-        # 가장 늦은 시간 구간부터 역탐색
-        for seg in reversed(temp_segments):
-            if energy_needed <= EPSILON: break
-            if seg["start"] >= ev.deadline: continue # 데드라인 이후 구간 사용 불가
-            
-            # 구간 내 차량 최대 수용량 vs 구간 잔여 용량
-            max_processable = max_ev_power * (seg["end"] - seg["start"])
-            fill = min(energy_needed, seg["capacity"], max_processable)
-            
-            if fill > EPSILON:
-                seg["capacity"] -= fill
-                energy_needed -= fill
-                
-                # 현재 타임스텝(index 0)에 할당된 것이 필수 부하(Mi)
-                if seg["index"] == 0: 
-                    must_run_load[ev.ev_id] += fill
-
-    # -----------------------------------------------------
-    # Phase 2: Execution (Tier 1 & Tier 2)
-    # -----------------------------------------------------
-    final_allocations = {ev.ev_id: 0.0 for ev in active_evs}
-    total_allocated = 0.0
-    
-    # Tier 1: Safety Allocation (Assign Mi)
-    for ev in active_evs:
-        # I_min = 0 이므로 Mi를 그대로 할당
-        p_req = must_run_load[ev.ev_id] / time_step
-        final_allocations[ev.ev_id] = p_req
-        total_allocated += p_req
-        
-    # Tier 2: Efficiency (Fill Surplus using EDF)
-    surplus = max(0.0, grid_capacity - total_allocated)
-    
-    # EDF 정렬
-    sorted_evs_edf = sorted(active_evs, key=lambda x: x.deadline)
-    
-    for ev in sorted_evs_edf:
-        if surplus <= EPSILON: break
-        
-        current_p = final_allocations[ev.ev_id]
-        max_p = min(max_ev_power, ev.remaining / time_step)
-        
-        room = max_p - current_p
-        if room > EPSILON:
-            bonus = min(surplus, room)
-            final_allocations[ev.ev_id] += bonus
-            surplus -= bonus
-            
-    # 리스트 형태로 반환
-    return [final_allocations[ev.ev_id] for ev in active_evs]
-
-# ---------------------------------------------------------
-# 3. 시뮬레이션 엔진
-# ---------------------------------------------------------
 def run_simulation(ev_set: List[EVRequest], algorithm: str) -> bool:
     evs = copy.deepcopy(ev_set)
     current_time = 0.0
