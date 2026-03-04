@@ -4,6 +4,95 @@ EPSILON = 1e-6
 
 
 
+def calculate_fluid_edf_zl_power(current_time, ready_evs, grid_capacity, max_ev_power, min_ev_power, time_step):
+    """
+    Fluid-EDF with ZL (Zero-Laxity) Policy
+    - Phase 1: ZL (Zero-Laxity) 차량 검출 및 최우선 할당
+    - Phase 2: 남은 차량에 대해 Fluid Rate 기반 할당 (I_min 보장)
+    - Phase 3: 잉여 전력(Surplus) 가속
+    """
+    if not ready_evs: return []
+
+    allocations = {ev.ev_id: 0.0 for ev in ready_evs}
+    surplus = grid_capacity
+    
+    zl_evs = []
+    normal_evs = []
+    
+    # -----------------------------------------------------
+    # Phase 1: Laxity 계산 및 ZL 상태 분류
+    # -----------------------------------------------------
+    for ev in ready_evs:
+        time_to_deadline = ev.deadline - current_time
+        # 최대 속도로 충전 시 필요한 최소 시간
+        time_needed = ev.remaining / max_ev_power 
+        
+        # 여유 시간 (Laxity)
+        laxity = time_to_deadline - time_needed
+        
+        # 여유 시간이 다음 타임스텝 이내이거나 0보다 작으면 ZL로 간주
+        if laxity <= time_step + EPSILON:
+            zl_evs.append(ev)
+        else:
+            normal_evs.append(ev)
+            
+    # ZL 차량 최우선 할당 (이 중에서도 데드라인이 급한 순)
+    zl_evs.sort(key=lambda x: x.deadline)
+    for ev in zl_evs:
+        if surplus <= EPSILON: break
+        
+        # 데드라인을 맞추기 위해 필요한 물리적 한계치 요구량
+        req_power = min(max_ev_power, ev.remaining / time_step)
+        alloc = min(surplus, req_power)
+        
+        allocations[ev.ev_id] = alloc
+        surplus -= alloc
+        
+    # -----------------------------------------------------
+    # Phase 2: 일반 차량에 대한 Fluid-EDF 할당
+    # -----------------------------------------------------
+    normal_evs.sort(key=lambda x: x.deadline)
+    
+    for ev in normal_evs:
+        if surplus <= EPSILON: break
+        time_to_deadline = ev.deadline - current_time
+        
+        # Fluid Rate: 남은 시간 동안 필요한 균등 충전 속도
+        fluid_rate = ev.remaining / time_to_deadline if time_to_deadline > EPSILON else max_ev_power
+        
+        # 하한(I_min)과 상한(물리적 한계) 적용
+        desired_rate = max(fluid_rate, min_ev_power)
+        desired_rate = min(desired_rate, max_ev_power, ev.remaining / time_step)
+        
+        # 남은 전력 내에서 할당
+        if surplus >= desired_rate - EPSILON:
+            alloc = desired_rate
+        else:
+            # 남은 전력이 I_min보다 적으면 할당 포기 (I_min 제약)
+            alloc = surplus if surplus >= min_ev_power else 0.0
+            
+        allocations[ev.ev_id] = alloc
+        surplus -= alloc
+        
+    # -----------------------------------------------------
+    # Phase 3: 잉여 전력 분배 (Surplus Filling)
+    # -----------------------------------------------------
+    if surplus > EPSILON:
+        for ev in normal_evs:
+            if surplus <= EPSILON: break
+            
+            current_alloc = allocations[ev.ev_id]
+            max_req = min(max_ev_power, ev.remaining / time_step)
+            room = max_req - current_alloc
+            
+            if room > EPSILON:
+                add = min(surplus, room)
+                allocations[ev.ev_id] += add
+                surplus -= add
+
+    return [allocations[ev.ev_id] for ev in ready_evs]
+
+
 # ---------------------------------------------------------
 # S-RAS 알고리즘 구현 (Safe-Robust Allocation Strategy)
 # Source: robust_r_min.docx
