@@ -39,7 +39,7 @@ class EVRequest:
         return f"EV{self.ev_id}(A={self.arrival}, Rem={self.remaining:.2f}, D={self.deadline})"
 
 # ---------------------------------------------------------
-# 2. 알고리즘 로직
+# 2. 알고리즘 로직 (기존과 동일)
 # ---------------------------------------------------------
 
 def calculate_sllf_power(current_time, active_evs, grid_capacity, max_ev_power, time_step):
@@ -98,27 +98,12 @@ def calculate_sllf_power(current_time, active_evs, grid_capacity, max_ev_power, 
     return best_allocations
 
 
-
 def calculate_sras_power(current_time, active_evs, grid_capacity, max_ev_power, time_step):
-    """
-    [S-RAS 구현 - I_min=0 버전]
-    Source: robust_r_min.docx
-    
-    1. Analysis Phase: Backward Analysis로 Must-Run Load (Mi) 계산
-    2. Execution Phase:
-       - Tier 1: Mi 할당 (I_min=0이므로 Mi 그대로 할당)
-       - Tier 2: 남은 자원(S)을 EDF 순서로 가속(Speed Up)
-    """
     if not active_evs: return []
 
-    # -----------------------------------------------------
-    # Phase 1: Backward Analysis for Must-Run Load (Mi)
-    # -----------------------------------------------------
-    # 1-1. 시간축 구간화 (Event-based Discretization)
     segments = []
     first_seg_end = current_time + time_step
     
-    # 첫 번째 구간 [t, t+1]: 여기서 할당된 양이 곧 Mi
     segments.append({
         "start": current_time, 
         "end": first_seg_end, 
@@ -126,7 +111,6 @@ def calculate_sras_power(current_time, active_evs, grid_capacity, max_ev_power, 
         "index": 0 
     })
     
-    # 미래 데드라인 구간들
     deadlines = sorted(list(set(ev.deadline for ev in active_evs)))
     deadlines = [d for d in deadlines if d > first_seg_end]
     
@@ -140,22 +124,18 @@ def calculate_sras_power(current_time, active_evs, grid_capacity, max_ev_power, 
         })
         start_t = d
 
-    # 1-2. 역방향 채우기 (Backward Filling)
     must_run_load = {ev.ev_id: 0.0 for ev in active_evs}
     
-    # 데드라인이 늦은 차량부터 역순으로 채움
     sorted_evs_backward = sorted(active_evs, key=lambda x: x.deadline, reverse=True)
     temp_segments = copy.deepcopy(segments)
     
     for ev in sorted_evs_backward:
         energy_needed = ev.remaining
         
-        # 가장 늦은 시간 구간부터 역탐색
         for seg in reversed(temp_segments):
             if energy_needed <= EPSILON: break
-            if seg["start"] >= ev.deadline: continue # 데드라인 이후 구간 사용 불가
+            if seg["start"] >= ev.deadline: continue 
             
-            # 구간 내 차량 최대 수용량 vs 구간 잔여 용량
             max_processable = max_ev_power * (seg["end"] - seg["start"])
             fill = min(energy_needed, seg["capacity"], max_processable)
             
@@ -163,27 +143,18 @@ def calculate_sras_power(current_time, active_evs, grid_capacity, max_ev_power, 
                 seg["capacity"] -= fill
                 energy_needed -= fill
                 
-                # 현재 타임스텝(index 0)에 할당된 것이 필수 부하(Mi)
                 if seg["index"] == 0: 
                     must_run_load[ev.ev_id] += fill
 
-    # -----------------------------------------------------
-    # Phase 2: Execution (Tier 1 & Tier 2)
-    # -----------------------------------------------------
     final_allocations = {ev.ev_id: 0.0 for ev in active_evs}
     total_allocated = 0.0
     
-    # Tier 1: Safety Allocation (Assign Mi)
     for ev in active_evs:
-        # I_min = 0 이므로 Mi를 그대로 할당
         p_req = must_run_load[ev.ev_id] / time_step
         final_allocations[ev.ev_id] = p_req
         total_allocated += p_req
         
-    # Tier 2: Efficiency (Fill Surplus using EDF)
     surplus = max(0.0, grid_capacity - total_allocated)
-    
-    # EDF 정렬
     sorted_evs_edf = sorted(active_evs, key=lambda x: x.deadline)
 
     for ev in sorted_evs_edf:
@@ -198,17 +169,17 @@ def calculate_sras_power(current_time, active_evs, grid_capacity, max_ev_power, 
             final_allocations[ev.ev_id] += bonus
             surplus -= bonus
             
-    # 리스트 형태로 반환
     return [final_allocations[ev.ev_id] for ev in active_evs]
 
 # ---------------------------------------------------------
-# 3. 시뮬레이션 엔진
+# 3. 시뮬레이션 엔진 (수정됨: Miss Ratio 반환)
 # ---------------------------------------------------------
-def run_simulation(ev_set: List[EVRequest], algorithm: str) -> bool:
+def run_simulation(ev_set: List[EVRequest], algorithm: str) -> float:
     evs = copy.deepcopy(ev_set)
     current_time = 0.0
     finished_cnt = 0
     total_evs = len(evs)
+    missed_cnt = 0
     
     max_deadline = max(e.deadline for e in evs) if evs else 0
 
@@ -219,16 +190,22 @@ def run_simulation(ev_set: List[EVRequest], algorithm: str) -> bool:
             if e.arrival <= current_time + EPSILON and e.remaining > EPSILON
         ]
         
-        # 2. 데드라인 Miss 판정
+        # 2. 데드라인 Miss 판정 (놓친 차량은 드롭 처리)
+        active_queue = []
         for e in ready_queue:
             if current_time >= float(e.deadline) - EPSILON:
-                return False 
+                missed_cnt += 1
+                e.remaining = 0.0 # 스케줄링에서 제외 (처리 포기)
+            else:
+                active_queue.append(e)
+
+        ready_queue = active_queue
 
         # 3. 전력 할당 계산
         allocated_powers = []
         if algorithm == 'sLLF':
             allocated_powers = calculate_sllf_power(current_time, ready_queue, TOTAL_STATION_POWER, MAX_EV_POWER, TIME_STEP)
-        elif algorithm == 'NEW_ALGO': # NEW_ALGO = S-RAS
+        elif algorithm == 'NEW_ALGO':
             allocated_powers = calculate_sras_power(current_time, ready_queue, TOTAL_STATION_POWER, MAX_EV_POWER, TIME_STEP)
         else:
             # Baseline Algorithms
@@ -258,37 +235,40 @@ def run_simulation(ev_set: List[EVRequest], algorithm: str) -> bool:
         finished_cnt = sum(1 for e in evs if e.remaining <= EPSILON)
         current_time += TIME_STEP
         
-        if current_time > max_deadline + 20.0: return False
+        # 안전 장치 (무한 루프 방지)
+        if current_time > max_deadline + 20.0: 
+            # 남은 차량 모두 Miss 처리
+            missed_cnt += sum(1 for e in evs if e.remaining > EPSILON)
+            break
 
-    return True
+    # 최종적으로 (미스한 차량 수 / 전체 차량 수) 반환
+    return missed_cnt / total_evs if total_evs > 0 else 0.0
 
 # ---------------------------------------------------------
-# 4. 병렬 작업 워커
+# 4. 병렬 작업 워커 (수정됨)
 # ---------------------------------------------------------
 def worker_task_data(args):
     level, ev_requests = args
     result_vector = {}
     for algo in ['EDF', 'LLF', 'NEW_ALGO', 'sLLF']:
-        success = run_simulation(ev_requests, algo)
-        result_vector[algo] = 1 if success else 0
+        miss_ratio = run_simulation(ev_requests, algo)
+        result_vector[algo] = miss_ratio # 단일 시행에서의 Miss Ratio 저장
     return level, result_vector
 
 # ---------------------------------------------------------
-# 5. 메인 실행
+# 5. 메인 실행 (수정됨)
 # ---------------------------------------------------------
 if __name__ == '__main__':
     start_time = time.time()
     
     if not os.path.exists(DATA_SAVE_PATH):
         print(f"Error: Data directory '{DATA_SAVE_PATH}' not found.")
-        # exit(1) # 주석 처리 (코드 확인용)
 
     congestion_levels = list(range(STRESS_START, STRESS_START + STRESS_NUM))
     all_tasks = []
     
     print(f"Loading data from '{DATA_SAVE_PATH}' and preparing tasks...")
 
-    # 실제 파일 로딩 부분 (경로가 유효해야 함)
     for level in congestion_levels:
         filename = f"ev_level_{level}.pkl"
         full_path = os.path.join(DATA_SAVE_PATH, filename)
@@ -299,17 +279,16 @@ if __name__ == '__main__':
                     for ev_set in level_dataset:
                         all_tasks.append((level, ev_set))
         else:
-            # print(f"Warning: {filename} not found.")
             pass
 
     if not all_tasks:
         print("No tasks loaded. Generating Mock Data for test...")
-        # 테스트를 위해 임의의 데이터 생성 가능
     
     print(f"Total Tasks Created: {len(all_tasks)}")
     print(f"Starting Simulation on {cpu_count()} Cores (I_min=0 mode)...")
 
-    results_map = {level: {k: 0 for k in ['EDF', 'LLF', 'NEW_ALGO', 'sLLF']} for level in congestion_levels}
+    # 결과 저장을 위한 변수 초기화
+    results_map = {level: {k: 0.0 for k in ['EDF', 'LLF', 'NEW_ALGO', 'sLLF']} for level in congestion_levels}
     trial_counts = {level: 0 for level in congestion_levels}
 
     if all_tasks:
@@ -318,11 +297,11 @@ if __name__ == '__main__':
             
         for level, res in raw_results:
             trial_counts[level] += 1
-            for algo, score in res.items():
-                results_map[level][algo] += score
+            for algo, miss_ratio in res.items():
+                results_map[level][algo] += miss_ratio
 
         ratios = {k: [] for k in ['EDF', 'LLF', 'NEW_ALGO', 'sLLF']}
-        print(f"\n[Simulation Results - Success Rate]")
+        print(f"\n[Simulation Results - Deadline Miss Ratio (Lower is Better)]")
         
         for level in congestion_levels:
             count = trial_counts[level]
@@ -333,7 +312,7 @@ if __name__ == '__main__':
             for algo in ['EDF', 'LLF', 'sLLF', 'NEW_ALGO']:
                 rate = results_map[level][algo] / count
                 ratios[algo].append(rate)
-                print(f"{algo}={rate:.2f} ", end="")
+                print(f"{algo}={rate:.4f} ", end="")
             print("")
     else:
         print("Skipping simulation (no data).")
@@ -348,12 +327,12 @@ if __name__ == '__main__':
         plt.plot(congestion_levels, ratios['NEW_ALGO'], marker='^', label=NAME_NEW_ALGO, linestyle='-', color='green', linewidth=2)
         plt.plot(congestion_levels, ratios['sLLF'], marker='*', label='sLLF', linestyle='-', color='red', linewidth=2)
 
-        plt.title('Algorithm Performance Comparison (No Min Rate)', fontsize=14)
+        plt.title('Algorithm Performance Comparison (Deadline Miss Ratio)', fontsize=14)
         plt.xlabel('Congestion Level (Stress)', fontsize=12)
-        plt.ylabel('Success Rate', fontsize=12)
+        plt.ylabel('Deadline Miss Ratio (Lower is Better)', fontsize=12)
         plt.grid(True, linestyle=':', alpha=0.7)
         plt.legend(fontsize=12)
         plt.xticks(congestion_levels)
-        plt.ylim(-0.05, 1.05)
+        plt.ylim(-0.05, 1.05) # Miss Ratio도 0.0 ~ 1.0 사이이므로 동일하게 유지
         plt.savefig(FIG_PATH)
-        # plt.show()
+#         plt.show()

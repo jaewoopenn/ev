@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import List
 from multiprocessing import Pool, cpu_count
 
+# TIER 2: LLF 
 # ---------------------------------------------------------
 # 1. 설정 및 상수
 # ---------------------------------------------------------
@@ -182,10 +183,13 @@ def calculate_sras_power(current_time, active_evs, grid_capacity, max_ev_power, 
         
     # Tier 2: Efficiency (Fill Surplus using EDF)
     surplus = max(0.0, grid_capacity - total_allocated)
-    
-    # EDF 정렬
-    sorted_evs_edf = sorted(active_evs, key=lambda x: x.deadline)
 
+    # EDF 정렬
+#     sorted_evs_edf = sorted(active_evs, key=lambda x: x.deadline)
+    # LLF
+    sorted_evs_edf = sorted(active_evs,key=lambda x: ((x.deadline - current_time) - (x.remaining/MAX_EV_POWER), x.ev_id))
+    
+    
     for ev in sorted_evs_edf:
         if surplus <= EPSILON: break
         

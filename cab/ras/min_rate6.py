@@ -101,24 +101,21 @@ def calculate_sllf_power(current_time, active_evs, grid_capacity, max_ev_power, 
 
 def calculate_sras_power(current_time, active_evs, grid_capacity, max_ev_power, time_step):
     """
-    [S-RAS 구현 - I_min=0 버전]
-    Source: robust_r_min.docx
+    [S-RAS (Q-FAS) 구현 - I_min=0 버전]
     
     1. Analysis Phase: Backward Analysis로 Must-Run Load (Mi) 계산
     2. Execution Phase:
-       - Tier 1: Mi 할당 (I_min=0이므로 Mi 그대로 할당)
-       - Tier 2: 남은 자원(S)을 EDF 순서로 가속(Speed Up)
+       - Tier 1: Mi 할당 (안전망 구축)
+       - Tier 2: 이중 모드 (Danger Zone 절대 방어 + Safe Zone 균등 상한 분배)
     """
     if not active_evs: return []
 
     # -----------------------------------------------------
     # Phase 1: Backward Analysis for Must-Run Load (Mi)
     # -----------------------------------------------------
-    # 1-1. 시간축 구간화 (Event-based Discretization)
     segments = []
     first_seg_end = current_time + time_step
     
-    # 첫 번째 구간 [t, t+1]: 여기서 할당된 양이 곧 Mi
     segments.append({
         "start": current_time, 
         "end": first_seg_end, 
@@ -126,7 +123,6 @@ def calculate_sras_power(current_time, active_evs, grid_capacity, max_ev_power, 
         "index": 0 
     })
     
-    # 미래 데드라인 구간들
     deadlines = sorted(list(set(ev.deadline for ev in active_evs)))
     deadlines = [d for d in deadlines if d > first_seg_end]
     
@@ -136,26 +132,22 @@ def calculate_sras_power(current_time, active_evs, grid_capacity, max_ev_power, 
             "start": start_t, 
             "end": d, 
             "capacity": grid_capacity * (d - start_t), 
-            "index": 1 # Future
+            "index": 1
         })
         start_t = d
 
-    # 1-2. 역방향 채우기 (Backward Filling)
     must_run_load = {ev.ev_id: 0.0 for ev in active_evs}
     
-    # 데드라인이 늦은 차량부터 역순으로 채움
     sorted_evs_backward = sorted(active_evs, key=lambda x: x.deadline, reverse=True)
     temp_segments = copy.deepcopy(segments)
     
     for ev in sorted_evs_backward:
         energy_needed = ev.remaining
         
-        # 가장 늦은 시간 구간부터 역탐색
         for seg in reversed(temp_segments):
             if energy_needed <= EPSILON: break
-            if seg["start"] >= ev.deadline: continue # 데드라인 이후 구간 사용 불가
+            if seg["start"] >= ev.deadline: continue
             
-            # 구간 내 차량 최대 수용량 vs 구간 잔여 용량
             max_processable = max_ev_power * (seg["end"] - seg["start"])
             fill = min(energy_needed, seg["capacity"], max_processable)
             
@@ -163,7 +155,6 @@ def calculate_sras_power(current_time, active_evs, grid_capacity, max_ev_power, 
                 seg["capacity"] -= fill
                 energy_needed -= fill
                 
-                # 현재 타임스텝(index 0)에 할당된 것이 필수 부하(Mi)
                 if seg["index"] == 0: 
                     must_run_load[ev.ev_id] += fill
 
@@ -175,30 +166,69 @@ def calculate_sras_power(current_time, active_evs, grid_capacity, max_ev_power, 
     
     # Tier 1: Safety Allocation (Assign Mi)
     for ev in active_evs:
-        # I_min = 0 이므로 Mi를 그대로 할당
         p_req = must_run_load[ev.ev_id] / time_step
         final_allocations[ev.ev_id] = p_req
         total_allocated += p_req
         
-    # Tier 2: Efficiency (Fill Surplus using EDF)
+    # Tier 2: 이중 모드 (Dual-Mode) 가속 할당
     surplus = max(0.0, grid_capacity - total_allocated)
     
-    # EDF 정렬
-    sorted_evs_edf = sorted(active_evs, key=lambda x: x.deadline)
-
-    for ev in sorted_evs_edf:
-        if surplus <= EPSILON: break
+    if surplus > EPSILON:
+        # M_i가 최대 속도의 90% 이상인 작업을 위험 지대로 분류
+        DANGER_THRESHOLD = max_ev_power * 0.99
         
-        current_p = final_allocations[ev.ev_id]
-        max_p = min(max_ev_power, ev.remaining / time_step)
+        danger_zone = []
+        safe_zone = []
         
-        room = max_p - current_p
-        if room > EPSILON:
-            bonus = min(surplus, room)
-            final_allocations[ev.ev_id] += bonus
-            surplus -= bonus
+        for ev in active_evs:
+            if final_allocations[ev.ev_id] >= DANGER_THRESHOLD:
+                danger_zone.append(ev)
+            else:
+                safe_zone.append(ev)
+                
+        # [Phase 2-1] 위험 지대 (Danger Zone) 절대 방어: 최우선으로 풀스피드 가속
+        danger_zone.sort(key=lambda x: x.deadline)
+        for ev in danger_zone:
+            if surplus <= EPSILON: break
+            current_p = final_allocations[ev.ev_id]
+            max_p = min(max_ev_power, ev.remaining / time_step)
+            room = max_p - current_p
             
-    # 리스트 형태로 반환
+            if room > EPSILON:
+                bonus = min(surplus, room)
+                final_allocations[ev.ev_id] += bonus
+                surplus -= bonus
+                
+        # [Phase 2-2] 안전 지대 (Safe Zone) 균등 상한 분배: 절벽 효과 방지 (Strategy A)
+        active_safe = safe_zone.copy()
+        
+        # 워터필링(Water-filling) 방식으로 균등 분배
+        while surplus > EPSILON and active_safe:
+            alpha = surplus / len(active_safe)
+            next_active_safe = []
+            progress_made = False
+            
+            for ev in active_safe:
+                current_p = final_allocations[ev.ev_id]
+                max_p = min(max_ev_power, ev.remaining / time_step)
+                room = max_p - current_p
+                
+                if room > EPSILON:
+                    bonus = min(alpha, room)
+                    final_allocations[ev.ev_id] += bonus
+                    surplus -= bonus
+                    progress_made = True
+                    
+                    # 아직 상한선(max_p)에 도달하지 않아 추가 가속이 가능하면 다음 라운드 진출
+                    if max_p - final_allocations[ev.ev_id] > EPSILON:
+                        next_active_safe.append(ev)
+                        
+            # 더 이상 할당할 공간이 없으면 무한루프 방지
+            if not progress_made:
+                break
+            
+            active_safe = next_active_safe
+
     return [final_allocations[ev.ev_id] for ev in active_evs]
 
 # ---------------------------------------------------------
@@ -228,7 +258,7 @@ def run_simulation(ev_set: List[EVRequest], algorithm: str) -> bool:
         allocated_powers = []
         if algorithm == 'sLLF':
             allocated_powers = calculate_sllf_power(current_time, ready_queue, TOTAL_STATION_POWER, MAX_EV_POWER, TIME_STEP)
-        elif algorithm == 'NEW_ALGO': # NEW_ALGO = S-RAS
+        elif algorithm == 'NEW_ALGO': # NEW_ALGO = S-RAS (Q-FAS)
             allocated_powers = calculate_sras_power(current_time, ready_queue, TOTAL_STATION_POWER, MAX_EV_POWER, TIME_STEP)
         else:
             # Baseline Algorithms
@@ -281,14 +311,12 @@ if __name__ == '__main__':
     
     if not os.path.exists(DATA_SAVE_PATH):
         print(f"Error: Data directory '{DATA_SAVE_PATH}' not found.")
-        # exit(1) # 주석 처리 (코드 확인용)
 
     congestion_levels = list(range(STRESS_START, STRESS_START + STRESS_NUM))
     all_tasks = []
     
     print(f"Loading data from '{DATA_SAVE_PATH}' and preparing tasks...")
 
-    # 실제 파일 로딩 부분 (경로가 유효해야 함)
     for level in congestion_levels:
         filename = f"ev_level_{level}.pkl"
         full_path = os.path.join(DATA_SAVE_PATH, filename)
@@ -299,12 +327,10 @@ if __name__ == '__main__':
                     for ev_set in level_dataset:
                         all_tasks.append((level, ev_set))
         else:
-            # print(f"Warning: {filename} not found.")
             pass
 
     if not all_tasks:
         print("No tasks loaded. Generating Mock Data for test...")
-        # 테스트를 위해 임의의 데이터 생성 가능
     
     print(f"Total Tasks Created: {len(all_tasks)}")
     print(f"Starting Simulation on {cpu_count()} Cores (I_min=0 mode)...")
@@ -356,4 +382,3 @@ if __name__ == '__main__':
         plt.xticks(congestion_levels)
         plt.ylim(-0.05, 1.05)
         plt.savefig(FIG_PATH)
-        # plt.show()
