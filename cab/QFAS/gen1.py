@@ -10,7 +10,7 @@ from dataclasses import dataclass
 # [요청사항] 데이터 저장 경로 글로벌 변수 선언
 DATA_SAVE_PATH = "/Users/jaewoo/data/ev/cab/data"
 
-TRIAL_NUM = 350         # 레벨당 실험 횟수
+TRIAL_NUM = 300         # 레벨당 실험 횟수
 STRESS_START = 2        # 시작 혼잡도
 STRESS_NUM = 11         # 혼잡도 단계 수 (0~9)
 MAX_EV_POWER = 1.0      # 데이터 생성 시 필요한 상수
