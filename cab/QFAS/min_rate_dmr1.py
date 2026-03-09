@@ -11,7 +11,7 @@ from multiprocessing import Pool, cpu_count
 # 1. 설정 및 상수
 # ---------------------------------------------------------
 DATA_SAVE_PATH = "/Users/jaewoo/data/ev/cab/data"
-FIG_PATH = "/Users/jaewoo/data/ev/cab/result_0.png" 
+FIG_PATH = "/Users/jaewoo/data/ev/cab/dmr.png" 
 NAME_NEW_ALGO='Q-FAS'
 
 TRIAL_NUM = 100
