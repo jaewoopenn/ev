@@ -101,7 +101,7 @@ def plot_per_processor(data, algorithms, output_dir, fig_format, dpi):
         ax.set_xlabel("Utilization Cap", fontsize=12)
         ax.set_ylabel("Acceptance Ratio", fontsize=12)
         ax.set_title(f"m = {m} processors", fontsize=13)
-        ax.set_ylim(-0.02, 1.05)
+        ax.set_ylim(0.3, 1.05)
         ax.set_xlim(caps[0] - 0.05 * m, caps[-1] + 0.05 * m)
         ax.legend(fontsize=11, loc="best")
         ax.grid(True, alpha=0.3)

@@ -36,8 +36,8 @@ PROCESSORS       = [2, 4, 8]                   # Must match generator settings
 ALGORITHMS       = ["FFD", "BFD", "WFD", "CU-UDP"]  # Partitioning heuristics
 
 # --- Utilization cap range (must match generator) ---
-UTIL_CAP_LO_RATIO = 0.5
-UTIL_CAP_HI_RATIO = 1.0
+UTIL_CAP_LO_RATIO = 0.45
+UTIL_CAP_HI_RATIO = 0.95
 # Step = 0.1 * m (same as generator)
 
 # ╔══════════════════════════════════════════════════════════════╗

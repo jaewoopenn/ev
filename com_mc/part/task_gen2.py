@@ -3,13 +3,15 @@
 IMC (Imprecise Mixed-Criticality) Task Set Generator
 for Partitioned Multiprocessor Scheduling
 
-Based on the task model from:
-  "EDF-VD Scheduling of Mixed-Criticality Systems
-   with Degraded Quality Guarantees" (Liu et al., RTSS 2016)
+Task generation methodology based on:
+  - Ramanathan & Easwaran, "Utilization Difference Based Partitioned
+    Scheduling of Mixed-Criticality Systems" (2020)
+  - Emberson, Stafford & Davis, "Techniques for the Synthesis of
+    Multiprocessor Tasksets" (WATERS 2010)
 
-Extended for multiprocessor (partitioned) with:
-  - UUniFast utilization distribution
-  - Configurable parameters
+Adapted for the IMC model from:
+  - Liu et al., "EDF-VD Scheduling of Mixed-Criticality Systems
+    with Degraded Quality Guarantees" (RTSS 2016)
 
 Usage:
   - Eclipse / IDE: Edit the PARAMETERS section below, then Run.
@@ -37,36 +39,43 @@ OUTPUT_FORMAT    = "both"                      # "json", "csv", or "both"
 PROCESSORS       = [2, 4, 8]                   # List of processor counts
 
 # --- Workload generation ---
-N_WORKLOADS      = 1000                        # Number of workloads per util_cap
+N_WORKLOADS      = 1000                        # Number of workloads per UB value
 SEED             = 42                          # Random seed for reproducibility
 
 # --- Task criticality ---
-P_CRITICALITY    = 0.5                         # Probability a task is HC (0.0 ~ 1.0)
+P_HC             = 0.5                         # Fraction of HC tasks
 
-# --- HC task: C_HI / C_LO ratio ---
-R_MIN            = 1.5                         # Min R for HC tasks
-R_MAX            = 2.5                         # Max R for HC tasks
-
-# --- LC task: C_D / C_A ratio (= lambda) ---
-LAMBDA_MIN       = 0.0                         # Min lambda for LC tasks
-LAMBDA_MAX       = 1.0                         # Max lambda for LC tasks
+# --- Task count ---
+# n in [m + 1, N_TASKS_FACTOR * m]  (UDP paper uses factor = 5)
+N_TASKS_FACTOR   = 5
 
 # --- Period ---
-PERIOD_MIN       = 100                         # Min task period
-PERIOD_MAX       = 1000                        # Max task period
+PERIOD_MIN       = 10                          # Min period (log-uniform)
+PERIOD_MAX       = 500                         # Max period (log-uniform)
 
-# --- Number of tasks per task set (per processor) ---
-# N_TASKS_PER_PROC_MIN = 5                       # n_tasks = uniform[this*m, that*m]
-# N_TASKS_PER_PROC_MAX = 10                      # n_tasks = uniform[this*m, that*m]
-N_TASKS_PER_PROC_MIN = 3                       # n_tasks = uniform[this*m, that*m]
-N_TASKS_PER_PROC_MAX = 6                      # n_tasks = uniform[this*m, that*m]
+# --- Individual task utilization bounds ---
+U_MIN            = 0.001                       # Min individual task utilization
+U_MAX            = 0.99                        # Max individual task utilization
 
-# --- Utilization cap range ---
-#   util_cap ranges from UTIL_CAP_LO_RATIO * m  to  UTIL_CAP_HI_RATIO * m
-#   with step = 0.1 * m
-UTIL_CAP_LO_RATIO = 0.5                       # Lower bound ratio (× m)
-UTIL_CAP_HI_RATIO = 1.0                       # Upper bound ratio (× m)
-# Step is always 0.1 * m
+# --- Normalized utilization sweep ---
+#   UB_norm = max(U_LC^A + U_HC^L, U_LC^D + U_HC^H) / m
+#   Sweep from UB_NORM_LO to UB_NORM_HI with step UB_NORM_STEP
+UB_NORM_LO       = 0.45
+UB_NORM_HI       = 0.95
+UB_NORM_STEP      = 0.1
+
+# --- Utilization component sweep (normalized, per processor) ---
+#   U_HC^H_norm in U_HH_RANGE
+#   U_HC^L_norm in [U_HL_START, U_HL_START+0.1, ..., U_HC^H_norm]
+#   U_LC^A_norm such that UB_norm = max(U_LC^A_norm + U_HC^L_norm, U_LC^D_norm + U_HC^H_norm)
+U_HH_RANGE       = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99]
+U_HL_START        = 0.05                       # Starting value for U_HC^L_norm
+U_HL_STEP         = 0.1                        # Step for U_HC^L_norm
+
+# --- LC degradation ratio ---
+#   For each LC task: u_D = lambda * u_A, lambda ~ uniform[LAMBDA_MIN, LAMBDA_MAX]
+LAMBDA_MIN        = 0.0
+LAMBDA_MAX        = 1.0
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║                  END OF PARAMETERS                           ║
@@ -86,10 +95,8 @@ class Task:
     deadline: int           # D_i = T_i (implicit deadline)
     C_LO: int               # WCET in LO mode
     C_HI: int               # WCET in HI mode
-    u_LO: float             # utilization in LO mode = C_LO / T_i
-    u_HI: float             # utilization in HI mode = C_HI / T_i
-    R: Optional[float] = None    # C_HI/C_LO ratio (HC tasks only)
-    lam: Optional[float] = None  # C_HI/C_LO ratio (LC tasks only, = lambda)
+    u_LO: float             # utilization in LO mode
+    u_HI: float             # utilization in HI mode
 
 
 @dataclass
@@ -97,39 +104,72 @@ class TaskSet:
     """A complete IMC task set (workload)."""
     taskset_id: int
     num_processors: int
-    util_cap: float
-    pCriticality: float
+    UB: float               # max(U_LO, U_HI) = target total utilization
     tasks: List[Task]
     # Computed utilization metrics
-    U_LC_A: float = 0.0     # sum of u_LO for LC tasks (= U^LO_LO)
-    U_HC_L: float = 0.0     # sum of u_LO for HC tasks (= U^LO_HI)
-    U_LC_D: float = 0.0     # sum of u_HI for LC tasks (= U^HI_LO)
-    U_HC_H: float = 0.0     # sum of u_HI for HC tasks (= U^HI_HI)
-    U_LO: float = 0.0       # U_LC_A + U_HC_L
-    U_HI: float = 0.0       # U_LC_D + U_HC_H
-    actual_util_cap: float = 0.0  # max(U_LO, U_HI)
+    U_LC_A: float = 0.0
+    U_HC_L: float = 0.0
+    U_LC_D: float = 0.0
+    U_HC_H: float = 0.0
+    U_LO: float = 0.0
+    U_HI: float = 0.0
+    actual_UB: float = 0.0
 
     def compute_utilizations(self):
-        """Compute aggregate utilization metrics."""
         self.U_LC_A = sum(t.u_LO for t in self.tasks if t.criticality == "LC")
         self.U_HC_L = sum(t.u_LO for t in self.tasks if t.criticality == "HC")
         self.U_LC_D = sum(t.u_HI for t in self.tasks if t.criticality == "LC")
         self.U_HC_H = sum(t.u_HI for t in self.tasks if t.criticality == "HC")
         self.U_LO = self.U_LC_A + self.U_HC_L
         self.U_HI = self.U_LC_D + self.U_HC_H
-        self.actual_util_cap = max(self.U_LO, self.U_HI)
+        self.actual_UB = max(self.U_LO, self.U_HI)
 
 
 # ============================================================
-# UUniFast Algorithm
+# Utilization Generation (Stafford's randfixedsum)
 # ============================================================
 
-def uunifast(n: int, u_total: float, rng: np.random.Generator) -> np.ndarray:
+def randfixedsum(n: int, u_total: float, rng: np.random.Generator,
+                 u_min: float = 0.001, u_max: float = 0.99) -> Optional[np.ndarray]:
     """
-    UUniFast algorithm (Bini & Buttazzo, 2005).
-    Generates n utilization values that sum to u_total,
-    uniformly distributed over the valid space.
+    Generate n random values in [u_min, u_max] that sum to u_total.
+
+    Uses the UUniFast-Discard approach with shifted range.
+    Stafford's exact randfixedsum is complex; this is a practical
+    equivalent that produces well-distributed utilizations.
+
+    Returns None if infeasible (u_total not achievable with n values in range).
     """
+    # Feasibility check
+    if u_total < n * u_min or u_total > n * u_max:
+        return None
+
+    # Shift to [0, u_max - u_min], generate, then shift back
+    shifted_total = u_total - n * u_min
+    shifted_max = u_max - u_min
+
+    if shifted_total < 0 or shifted_total > n * shifted_max:
+        return None
+
+    # UUniFast-Discard on shifted range
+    for _ in range(200):
+        utils = _uunifast(n, shifted_total, rng)
+        if np.all(utils >= 0) and np.all(utils <= shifted_max):
+            return utils + u_min
+
+    # Fallback: Dirichlet-based
+    for _ in range(200):
+        utils = rng.dirichlet(np.ones(n)) * shifted_total
+        if np.all(utils >= 0) and np.all(utils <= shifted_max):
+            return utils + u_min
+
+    # Last resort
+    utils = np.full(n, shifted_total / n)
+    return utils + u_min
+
+
+def _uunifast(n: int, u_total: float, rng: np.random.Generator) -> np.ndarray:
+    """Standard UUniFast algorithm."""
     utils = np.zeros(n)
     sum_u = u_total
     for i in range(n - 1):
@@ -141,35 +181,11 @@ def uunifast(n: int, u_total: float, rng: np.random.Generator) -> np.ndarray:
     return utils
 
 
-def uunifast_discard(n: int, u_total: float, rng: np.random.Generator,
-                     max_attempts: int = 100) -> np.ndarray:
-    """
-    UUniFast-Discard: rejects task sets where any u_i > 1.
-    Falls back to Dirichlet-based generation if discard rate is too high.
-    """
-    if u_total <= n:
-        for _ in range(max_attempts):
-            utils = uunifast(n, u_total, rng)
-            if np.all(utils <= 1.0) and np.all(utils > 0):
-                return utils
-
-    # Fallback: Dirichlet-based generation capped at 1.0
-    for _ in range(max_attempts):
-        utils = rng.dirichlet(np.ones(n)) * u_total
-        if np.all(utils <= 1.0) and np.all(utils > 0):
-            return utils
-
-    # Last resort: uniform distribution with slight noise
-    base = u_total / n
-    if base > 1.0:
-        utils = np.ones(n) * (u_total / n)
-        return np.clip(utils, 0.001, 1.0)
-    noise = rng.uniform(-base * 0.3, base * 0.3, n)
-    utils = base + noise
-    utils = np.clip(utils, 0.001, 1.0)
-    utils = utils * (u_total / utils.sum())
-    utils = np.clip(utils, 0.001, 1.0)
-    return utils
+def log_uniform_int(lo: int, hi: int, rng: np.random.Generator) -> int:
+    """Draw an integer from a log-uniform distribution over [lo, hi]."""
+    log_lo = np.log(lo)
+    log_hi = np.log(hi)
+    return int(round(np.exp(rng.uniform(log_lo, log_hi))))
 
 
 # ============================================================
@@ -178,277 +194,318 @@ def uunifast_discard(n: int, u_total: float, rng: np.random.Generator,
 
 class IMCTaskSetGenerator:
     """
-    Generator for IMC task sets.
+    Generates IMC task sets following the UDP paper methodology.
 
-    Parameters:
-        num_processors:         number of processors (e.g., 2, 4, 8)
-        pCriticality:           probability that a task is HC
-        R_range:                (min, max) for HC task's C_HI/C_LO ratio
-        lambda_range:           (min, max) for LC task's C_HI/C_LO ratio
-        period_range:           (min, max) for task period
-        n_tasks_per_proc_range: (min, max) tasks per processor
-        seed:                   random seed for reproducibility
+    For a given UB (= max(U_LO, U_HI)):
+      1. Enumerate valid (U_HC^H_norm, U_HC^L_norm) combinations
+      2. For each combination, compute U_LC^A_norm and U_LC^D_norm
+      3. Generate individual task utilizations and periods
+      4. Collect task sets until N_WORKLOADS reached
     """
 
     def __init__(
         self,
-        num_processors: int = 4,
-        pCriticality: float = 0.5,
-        R_range: tuple = (1.5, 2.5),
+        num_processors: int,
+        p_hc: float = 0.5,
+        n_tasks_factor: int = 5,
+        period_range: tuple = (10, 500),
+        u_min: float = 0.001,
+        u_max: float = 0.99,
         lambda_range: tuple = (0.0, 1.0),
-        period_range: tuple = (100, 1000),
-        n_tasks_per_proc_range: tuple = (5, 10),
+        u_hh_range: list = None,
+        u_hl_start: float = 0.05,
+        u_hl_step: float = 0.1,
         seed: Optional[int] = None
     ):
-        self.num_processors = num_processors
-        self.pCriticality = pCriticality
-        self.R_range = R_range
-        self.lambda_range = lambda_range
+        self.m = num_processors
+        self.p_hc = p_hc
+        self.n_tasks_factor = n_tasks_factor
         self.period_range = period_range
-        self.n_tasks_per_proc_range = n_tasks_per_proc_range
+        self.u_min = u_min
+        self.u_max = u_max
+        self.lambda_range = lambda_range
+        self.u_hh_range = u_hh_range or U_HH_RANGE
+        self.u_hl_start = u_hl_start
+        self.u_hl_step = u_hl_step
         self.rng = np.random.default_rng(seed)
 
-    def generate_single_taskset(
-        self, taskset_id: int, util_cap: float
-    ) -> TaskSet:
+    def _generate_one_taskset(
+        self,
+        taskset_id: int,
+        UB: float,
+        U_HC_H_total: float,
+        U_HC_L_total: float,
+        U_LC_A_total: float
+    ) -> Optional[TaskSet]:
         """
-        Generate a single IMC task set such that
-        max(U_LO, U_HI) ≈ util_cap.
-
-        Approach:
-          1. Decide n tasks, assign criticality, generate R/lambda/period.
-          2. UUniFast to distribute base utilizations.
-          3. Compute preliminary U_LO and U_HI.
-          4. Scale all utilizations so that max(U_LO, U_HI) = util_cap.
-          5. Recompute C_LO, C_HI from scaled utilizations.
+        Generate a single task set with specified total utilizations.
 
         Args:
-            taskset_id: unique identifier
-            util_cap:   target max(U_LO, U_HI)
+            taskset_id:     unique id
+            UB:             target max(U_LO, U_HI)
+            U_HC_H_total:   total u_HI for HC tasks (system-level)
+            U_HC_L_total:   total u_LO for HC tasks (system-level)
+            U_LC_A_total:   total u_LO for LC tasks (system-level)
 
         Returns:
-            TaskSet object
+            TaskSet or None if generation failed
         """
-        # Step 1: Determine number of tasks (proportional to processor count)
-        n_min = self.n_tasks_per_proc_range[0] * self.num_processors
-        n_max = self.n_tasks_per_proc_range[1] * self.num_processors
+        m = self.m
+
+        # Determine task count
+        n_min = m + 1
+        n_max = self.n_tasks_factor * m
         n = self.rng.integers(n_min, n_max + 1)
 
-        # Step 2: Assign criticality, R/lambda, period for each task
-        task_params = []
-        for i in range(n):
-            T_i = self.rng.integers(
-                self.period_range[0], self.period_range[1] + 1
-            )
-            is_HC = self.rng.random() < self.pCriticality
+        # Determine number of HC and LC tasks
+        n_hc = max(1, round(n * self.p_hc))
+        n_lc = n - n_hc
+        if n_lc < 1:
+            n_lc = 1
+            n_hc = n - 1
 
-            if is_HC:
-                R = self.rng.uniform(self.R_range[0], self.R_range[1])
-                task_params.append({
-                    "id": i, "crit": "HC", "T": int(T_i), "R": R, "lam": None
-                })
-            else:
-                lam = self.rng.uniform(
-                    self.lambda_range[0], self.lambda_range[1]
-                )
-                task_params.append({
-                    "id": i, "crit": "LC", "T": int(T_i), "R": None, "lam": lam
-                })
+        # --- Generate HC task utilizations ---
+        # u_LO for HC tasks: sum = U_HC_L_total, each in [u_min, min(u_max, U_HC_L_total)]
+        hc_u_lo = randfixedsum(n_hc, U_HC_L_total, self.rng, self.u_min, self.u_max)
+        if hc_u_lo is None:
+            return None
 
-        # Step 3: UUniFast to distribute base utilizations
-        # Use util_cap as initial target (will be scaled later)
-        base_utils = uunifast_discard(n, util_cap, self.rng)
-
-        # Step 3.5: Cap individual HC task utilizations so that u_HI <= 1.0
-        # For HC task: u_HI = R * u_base, so we need u_base <= 1/R
-        # Redistribute any excess to other tasks
-        needs_redistribution = True
-        max_iters = 10
-        for _ in range(max_iters):
-            excess = 0.0
-            uncapped_indices = []
-            for i in range(n):
-                if task_params[i]["crit"] == "HC":
-                    R = task_params[i]["R"]
-                    cap_val = 1.0 / R  # max u_base so that R*u_base <= 1.0
-                    if base_utils[i] > cap_val:
-                        excess += base_utils[i] - cap_val
-                        base_utils[i] = cap_val
-                    else:
-                        uncapped_indices.append(i)
-                else:
-                    # LC task: u_LO = u_base, need u_base <= 1.0 (already ensured)
-                    if base_utils[i] <= 1.0:
-                        uncapped_indices.append(i)
-
-            if excess < 1e-9 or not uncapped_indices:
-                break
-
-            # Redistribute excess proportionally among uncapped tasks
-            uncapped_sum = sum(base_utils[j] for j in uncapped_indices)
-            if uncapped_sum > 0:
-                for j in uncapped_indices:
-                    base_utils[j] += excess * (base_utils[j] / uncapped_sum)
-            else:
-                for j in uncapped_indices:
-                    base_utils[j] += excess / len(uncapped_indices)
-
-        # Step 4: Compute preliminary utilizations and scaling factor
-        # For HC: u_LO = base, u_HI = R * base
-        # For LC: u_LO = base, u_HI = lambda * base
-        prelim_U_LO = 0.0  # sum of u_LO (= sum of base_utils = util_cap)
-        prelim_U_HI = 0.0  # sum of u_HI
-        for i in range(n):
-            u_base = base_utils[i]
-            if task_params[i]["crit"] == "HC":
-                prelim_U_LO += u_base
-                prelim_U_HI += task_params[i]["R"] * u_base
-            else:
-                prelim_U_LO += u_base
-                prelim_U_HI += task_params[i]["lam"] * u_base
-
-        prelim_max = max(prelim_U_LO, prelim_U_HI)
-
-        # Scale factor: we want max(U_LO, U_HI) = util_cap
-        if prelim_max > 0:
-            scale = util_cap / prelim_max
+        # u_HI for HC tasks: sum = U_HC_H_total, each in [corresponding u_LO, u_max]
+        # Strategy: distribute U_HC_H_total proportionally to u_LO, then adjust
+        if U_HC_L_total > 0:
+            ratios = hc_u_lo / hc_u_lo.sum()
         else:
-            scale = 1.0
+            ratios = np.ones(n_hc) / n_hc
+        hc_u_hi = ratios * U_HC_H_total
 
-        # Step 5: Apply scaling and compute final C_LO, C_HI
+        # Ensure u_HI >= u_LO and u_HI <= u_max for each HC task
+        for i in range(n_hc):
+            hc_u_hi[i] = max(hc_u_hi[i], hc_u_lo[i])
+            hc_u_hi[i] = min(hc_u_hi[i], self.u_max)
+
+        # Rescale to hit target sum
+        current_sum = hc_u_hi.sum()
+        if current_sum > 0 and abs(current_sum - U_HC_H_total) > 1e-9:
+            scale = U_HC_H_total / current_sum
+            hc_u_hi *= scale
+            # Re-enforce bounds
+            for i in range(n_hc):
+                hc_u_hi[i] = max(hc_u_hi[i], hc_u_lo[i])
+                hc_u_hi[i] = min(hc_u_hi[i], self.u_max)
+
+        # --- Generate LC task utilizations ---
+        # u_LO (= u_A) for LC tasks: sum = U_LC_A_total
+        lc_u_lo = randfixedsum(n_lc, U_LC_A_total, self.rng, self.u_min, self.u_max)
+        if lc_u_lo is None:
+            return None
+
+        # u_HI (= u_D) for LC tasks: u_D = lambda * u_A, lambda ~ uniform
+        lc_lambdas = self.rng.uniform(self.lambda_range[0], self.lambda_range[1], n_lc)
+        lc_u_hi = lc_u_lo * lc_lambdas
+
+        # --- Generate periods and compute C values ---
         tasks = []
-        for i in range(n):
-            u_base_scaled = base_utils[i] * scale
-            T_i = task_params[i]["T"]
-            D_i = T_i  # implicit deadline
+        task_id = 0
 
-            if task_params[i]["crit"] == "HC":
-                R = task_params[i]["R"]
-                C_LO = max(1, round(u_base_scaled * T_i))
-                C_HI = max(C_LO, round(R * u_base_scaled * T_i))
+        for i in range(n_hc):
+            T = log_uniform_int(self.period_range[0], self.period_range[1], self.rng)
+            C_LO = max(1, int(np.ceil(hc_u_lo[i] * T)))
+            C_HI = max(C_LO, int(np.ceil(hc_u_hi[i] * T)))
+            u_lo_actual = C_LO / T
+            u_hi_actual = C_HI / T
 
-                u_LO = C_LO / T_i
-                u_HI = C_HI / T_i
+            tasks.append(Task(
+                task_id=task_id, criticality="HC",
+                period=T, deadline=T,
+                C_LO=C_LO, C_HI=C_HI,
+                u_LO=u_lo_actual, u_HI=u_hi_actual
+            ))
+            task_id += 1
 
-                task = Task(
-                    task_id=i, criticality="HC",
-                    period=T_i, deadline=D_i,
-                    C_LO=C_LO, C_HI=C_HI,
-                    u_LO=u_LO, u_HI=u_HI,
-                    R=R, lam=None
-                )
-            else:
-                lam = task_params[i]["lam"]
-                C_LO = max(1, round(u_base_scaled * T_i))
-                C_HI = max(0, round(lam * u_base_scaled * T_i))
+        for i in range(n_lc):
+            T = log_uniform_int(self.period_range[0], self.period_range[1], self.rng)
+            C_LO = max(1, int(np.ceil(lc_u_lo[i] * T)))
+            C_HI = max(0, int(np.round(lc_u_hi[i] * T)))
+            u_lo_actual = C_LO / T
+            u_hi_actual = C_HI / T
 
-                u_LO = C_LO / T_i
-                u_HI = C_HI / T_i
+            tasks.append(Task(
+                task_id=task_id, criticality="LC",
+                period=T, deadline=T,
+                C_LO=C_LO, C_HI=C_HI,
+                u_LO=u_lo_actual, u_HI=u_hi_actual
+            ))
+            task_id += 1
 
-                task = Task(
-                    task_id=i, criticality="LC",
-                    period=T_i, deadline=D_i,
-                    C_LO=C_LO, C_HI=C_HI,
-                    u_LO=u_LO, u_HI=u_HI,
-                    R=None, lam=lam
-                )
-
-            tasks.append(task)
-
-        # Step 6: Create TaskSet and compute utilizations
         ts = TaskSet(
             taskset_id=taskset_id,
-            num_processors=self.num_processors,
-            util_cap=util_cap,
-            pCriticality=self.pCriticality,
+            num_processors=self.m,
+            UB=UB,
             tasks=tasks
         )
         ts.compute_utilizations()
 
+        # Post-scaling: adjust so that max(U_LO, U_HI) = UB
+        if ts.actual_UB > 1e-9:
+            scale = UB / ts.actual_UB
+            if abs(scale - 1.0) > 1e-6:
+                for t in tasks:
+                    T = t.period
+                    t.C_LO = max(1, int(round(t.u_LO * scale * T)))
+                    t.C_HI = max(0 if t.criticality == "LC" else t.C_LO,
+                                 int(round(t.u_HI * scale * T)))
+                    t.u_LO = t.C_LO / T
+                    t.u_HI = t.C_HI / T
+                ts.compute_utilizations()
         return ts
 
-    def generate_workloads(
-        self, util_cap: float, n_workloads: int = 1000, start_id: int = 0
-    ) -> List[TaskSet]:
-        """Generate multiple workloads for a given utilization cap."""
+    def _enumerate_util_configs(self, UB_norm: float) -> list:
+        """
+        Enumerate valid (U_HC^H_norm, U_HC^L_norm, U_LC^A_norm) configurations
+        for a given normalized UB.
+
+        Following UDP paper:
+          U_HC^H_norm in u_hh_range, filtered by <= UB_norm
+          U_HC^L_norm in [u_hl_start, u_hl_start+step, ..., U_HC^H_norm]
+          U_LC^A_norm chosen so that UB_norm = max(U_LC^A + U_HC^L, U_LC^D + U_HC^H)/m
+
+        For IMC model, U_LC^D depends on lambda (random), so we set:
+          U_LC^A_norm = UB_norm - U_HC^L_norm
+          (This ensures U_LO = UB * m when U_LO is the dominant term)
+          Then actual UB depends on U_HI = U_LC^D + U_HC^H
+
+        Returns list of (U_HC_H_total, U_HC_L_total, U_LC_A_total) tuples.
+        """
+        m = self.m
+        configs = []
+
+        for u_hh_norm in self.u_hh_range:
+            if u_hh_norm > UB_norm:
+                continue
+
+            u_hl_norm = self.u_hl_start
+            while u_hl_norm <= u_hh_norm + 1e-9:
+                # U_LC^A_norm: fill remaining capacity for LO mode
+                u_la_norm = UB_norm - u_hl_norm
+                if u_la_norm < 0.01:
+                    u_hl_norm += self.u_hl_step
+                    continue
+
+                # Feasibility: ensure individual tasks can hold these utils
+                U_HC_H_total = u_hh_norm * m
+                U_HC_L_total = u_hl_norm * m
+                U_LC_A_total = u_la_norm * m
+
+                configs.append((U_HC_H_total, U_HC_L_total, U_LC_A_total))
+                u_hl_norm += self.u_hl_step
+
+        return configs
+
+    def generate_for_UB(self, UB_norm: float, n_workloads: int,
+                        start_id: int = 0) -> List[TaskSet]:
+        """
+        Generate workloads for a given normalized UB.
+
+        Cycles through utilization configurations and generates task sets
+        until n_workloads are collected.
+        """
+        m = self.m
+        UB = UB_norm * m
+        configs = self._enumerate_util_configs(UB_norm)
+
+        if not configs:
+            print(f"  WARNING: No valid configs for UB_norm={UB_norm:.2f}")
+            return []
+
         workloads = []
-        for i in range(n_workloads):
-            ts = self.generate_single_taskset(start_id + i, util_cap)
-            workloads.append(ts)
+        config_idx = 0
+        attempts = 0
+        max_attempts = n_workloads * 10
+
+        while len(workloads) < n_workloads and attempts < max_attempts:
+            cfg = configs[config_idx % len(configs)]
+            config_idx += 1
+            attempts += 1
+
+            U_HC_H_total, U_HC_L_total, U_LC_A_total = cfg
+
+            ts = self._generate_one_taskset(
+                start_id + len(workloads),
+                UB,
+                U_HC_H_total,
+                U_HC_L_total,
+                U_LC_A_total
+            )
+
+            if ts is not None:
+                workloads.append(ts)
+
         return workloads
 
-    def generate_all(
-        self, n_workloads: int = 1000,
-        util_cap_lo_ratio: float = 0.5,
-        util_cap_hi_ratio: float = 1.0
-    ) -> dict:
+    def generate_all(self, n_workloads: int,
+                     ub_lo: float, ub_hi: float, ub_step: float) -> dict:
         """
-        Generate workloads for all utilization caps.
-
-        util_cap: from util_cap_lo_ratio * m  to  util_cap_hi_ratio * m
-        step:     0.1 * m
-
-        Example for m=4:
-          caps = [2.0, 2.4, 2.8, 3.2, 3.6, 4.0]   (step = 0.4)
+        Generate workloads for all UB values.
 
         Args:
-            n_workloads:       number of workloads per utilization cap
-            util_cap_lo_ratio: lower ratio (default 0.5)
-            util_cap_hi_ratio: upper ratio (default 1.0)
+            n_workloads: workloads per UB
+            ub_lo:       min normalized UB
+            ub_hi:       max normalized UB
+            ub_step:     step for normalized UB
 
         Returns:
-            dict mapping util_cap -> list of TaskSet
+            dict mapping UB (total, not normalized) -> list of TaskSet
         """
-        m = self.num_processors
-        step = 0.1 * m
-        cap_lo = util_cap_lo_ratio * m
-        cap_hi = util_cap_hi_ratio * m
+        m = self.m
+        ub_norms = np.arange(ub_lo, ub_hi + ub_step * 0.01, ub_step)
+        ub_norms = np.round(ub_norms, 2)
 
-        # Generate util_cap values
-        util_caps = np.arange(cap_lo, cap_hi + step * 0.01, step)
-        util_caps = np.round(util_caps, 2)
+        n_min = m + 1
+        n_max = self.n_tasks_factor * m
+
+        print(f"Generating workloads for m={m} processors")
+        print(f"UB_norm values: {ub_norms.tolist()}")
+        print(f"Workloads per UB: {n_workloads}")
+        print(f"P_HC: {self.p_hc}")
+        print(f"Task count: [{n_min}, {n_max}]")
+        print(f"Period: log-uniform [{self.period_range[0]}, {self.period_range[1]}]")
+        print(f"Lambda range: {self.lambda_range}")
+        print(f"u range: [{self.u_min}, {self.u_max}]")
+        print("-" * 60)
 
         all_workloads = {}
         total_id = 0
 
-        n_min = self.n_tasks_per_proc_range[0] * m
-        n_max = self.n_tasks_per_proc_range[1] * m
-
-        print(f"Generating workloads for m={m} processors")
-        print(f"Utilization caps: {util_caps.tolist()}")
-        print(f"Step: {step:.1f} (= 0.1 × {m})")
-        print(f"Workloads per cap: {n_workloads}")
-        print(f"pCriticality: {self.pCriticality}")
-        print(f"R range: {self.R_range}, lambda range: {self.lambda_range}")
-        print(f"Period range: {self.period_range}")
-        print(f"n_tasks range: [{n_min}, {n_max}] "
-              f"(base {self.n_tasks_per_proc_range} × m={m})")
-        print("-" * 60)
-
-        for cap in util_caps:
-            cap = float(cap)
+        for ub_norm in ub_norms:
+            ub_norm = float(ub_norm)
+            UB = ub_norm * m
             t_start = time.time()
-            workloads = self.generate_workloads(cap, n_workloads, total_id)
+
+            workloads = self.generate_for_UB(ub_norm, n_workloads, total_id)
             t_elapsed = time.time() - t_start
 
-            # Compute statistics
-            actual_caps = [ts.actual_util_cap for ts in workloads]
-            u_los = [ts.U_LO for ts in workloads]
-            u_his = [ts.U_HI for ts in workloads]
-            n_tasks_list = [len(ts.tasks) for ts in workloads]
+            if workloads:
+                actual_ubs = [ts.actual_UB for ts in workloads]
+                u_los = [ts.U_LO for ts in workloads]
+                u_his = [ts.U_HI for ts in workloads]
+                n_tasks = [len(ts.tasks) for ts in workloads]
+                util_diffs = [ts.U_HC_H - ts.U_HC_L for ts in workloads]
 
-            print(
-                f"  util_cap={cap:.2f} | "
-                f"actual_cap: mean={np.mean(actual_caps):.3f}, "
-                f"std={np.std(actual_caps):.3f} | "
-                f"U_LO: {np.mean(u_los):.3f} | "
-                f"U_HI: {np.mean(u_his):.3f} | "
-                f"avg_tasks: {np.mean(n_tasks_list):.1f} | "
-                f"time: {t_elapsed:.2f}s"
-            )
+                print(
+                    f"  UB={UB:.2f} (norm={ub_norm:.2f}) | "
+                    f"actual: {np.mean(actual_ubs):.3f}±{np.std(actual_ubs):.3f} | "
+                    f"U_LO: {np.mean(u_los):.3f} | "
+                    f"U_HI: {np.mean(u_his):.3f} | "
+                    f"diff: {np.mean(util_diffs):.3f}±{np.std(util_diffs):.3f} | "
+                    f"tasks: {np.mean(n_tasks):.1f} | "
+                    f"n={len(workloads)} | "
+                    f"time: {t_elapsed:.2f}s"
+                )
+            else:
+                print(f"  UB={UB:.2f} (norm={ub_norm:.2f}) | NO WORKLOADS GENERATED")
 
-            all_workloads[cap] = workloads
-            total_id += n_workloads
+            all_workloads[round(UB, 2)] = workloads
+            total_id += len(workloads)
 
         return all_workloads
 
@@ -458,18 +515,18 @@ class IMCTaskSetGenerator:
 # ============================================================
 
 def export_to_json(all_workloads: dict, output_dir: str, prefix: str = "imc"):
-    """Export workloads to JSON files, one per utilization cap."""
     os.makedirs(output_dir, exist_ok=True)
 
-    for cap, workloads in all_workloads.items():
+    for UB, workloads in all_workloads.items():
+        if not workloads:
+            continue
         m = workloads[0].num_processors
-        filename = f"{prefix}_m{m}_cap{cap:.2f}.json"
+        filename = f"{prefix}_m{m}_cap{UB:.2f}.json"
         filepath = os.path.join(output_dir, filename)
 
         data = {
             "num_processors": m,
-            "util_cap": cap,
-            "pCriticality": workloads[0].pCriticality,
+            "util_cap": UB,
             "num_workloads": len(workloads),
             "workloads": []
         }
@@ -483,7 +540,7 @@ def export_to_json(all_workloads: dict, output_dir: str, prefix: str = "imc"):
                 "U_HC_H": round(ts.U_HC_H, 6),
                 "U_LO": round(ts.U_LO, 6),
                 "U_HI": round(ts.U_HI, 6),
-                "actual_util_cap": round(ts.actual_util_cap, 6),
+                "actual_util_cap": round(ts.actual_UB, 6),
                 "tasks": [
                     {
                         "id": int(t.task_id),
@@ -494,8 +551,6 @@ def export_to_json(all_workloads: dict, output_dir: str, prefix: str = "imc"):
                         "C_HI": int(t.C_HI),
                         "u_LO": round(t.u_LO, 6),
                         "u_HI": round(t.u_HI, 6),
-                        "R": round(t.R, 4) if t.R is not None else None,
-                        "lam": round(t.lam, 4) if t.lam is not None else None
                     }
                     for t in ts.tasks
                 ]
@@ -509,10 +564,16 @@ def export_to_json(all_workloads: dict, output_dir: str, prefix: str = "imc"):
 
 
 def export_summary_csv(all_workloads: dict, output_dir: str, prefix: str = "imc"):
-    """Export a summary CSV with aggregate statistics per utilization cap."""
     os.makedirs(output_dir, exist_ok=True)
 
-    m = list(all_workloads.values())[0][0].num_processors
+    m = None
+    for wl in all_workloads.values():
+        if wl:
+            m = wl[0].num_processors
+            break
+    if m is None:
+        return
+
     filename = f"{prefix}_m{m}_summary.csv"
     filepath = os.path.join(output_dir, filename)
 
@@ -524,34 +585,38 @@ def export_summary_csv(all_workloads: dict, output_dir: str, prefix: str = "imc"
             "avg_U_HI", "std_U_HI",
             "avg_actual_cap", "std_actual_cap",
             "avg_U_LC_A", "avg_U_HC_L", "avg_U_LC_D", "avg_U_HC_H",
+            "avg_util_diff", "std_util_diff",
             "avg_n_HC", "avg_n_LC"
         ])
 
-        for cap in sorted(all_workloads.keys()):
-            workloads = all_workloads[cap]
-            n = len(workloads)
+        for UB in sorted(all_workloads.keys()):
+            workloads = all_workloads[UB]
+            if not workloads:
+                continue
 
             n_tasks = [len(ts.tasks) for ts in workloads]
             u_los = [ts.U_LO for ts in workloads]
             u_his = [ts.U_HI for ts in workloads]
-            actual_caps = [ts.actual_util_cap for ts in workloads]
+            actual_caps = [ts.actual_UB for ts in workloads]
             u_lc_a = [ts.U_LC_A for ts in workloads]
             u_hc_l = [ts.U_HC_L for ts in workloads]
             u_lc_d = [ts.U_LC_D for ts in workloads]
             u_hc_h = [ts.U_HC_H for ts in workloads]
+            util_diffs = [ts.U_HC_H - ts.U_HC_L for ts in workloads]
             n_hc = [sum(1 for t in ts.tasks if t.criticality == "HC")
                     for ts in workloads]
             n_lc = [sum(1 for t in ts.tasks if t.criticality == "LC")
                     for ts in workloads]
 
             writer.writerow([
-                f"{cap:.2f}", n, m,
+                f"{UB:.2f}", len(workloads), m,
                 f"{np.mean(n_tasks):.2f}",
                 f"{np.mean(u_los):.4f}", f"{np.std(u_los):.4f}",
                 f"{np.mean(u_his):.4f}", f"{np.std(u_his):.4f}",
                 f"{np.mean(actual_caps):.4f}", f"{np.std(actual_caps):.4f}",
                 f"{np.mean(u_lc_a):.4f}", f"{np.mean(u_hc_l):.4f}",
                 f"{np.mean(u_lc_d):.4f}", f"{np.mean(u_hc_h):.4f}",
+                f"{np.mean(util_diffs):.4f}", f"{np.std(util_diffs):.4f}",
                 f"{np.mean(n_hc):.2f}", f"{np.mean(n_lc):.2f}"
             ])
 
@@ -564,20 +629,18 @@ def export_summary_csv(all_workloads: dict, output_dir: str, prefix: str = "imc"
 
 def main():
     print("=" * 60)
-    print("IMC Task Set Generator")
+    print("IMC Task Set Generator (UDP-style)")
     print("=" * 60)
     print(f"Output directory: {OUTPUT_DIR}")
-    print(f"Output format:    {OUTPUT_FORMAT}")
     print(f"Processors:       {PROCESSORS}")
-    print(f"Workloads/cap:    {N_WORKLOADS}")
+    print(f"Workloads/UB:     {N_WORKLOADS}")
     print(f"Seed:             {SEED}")
-    print(f"pCriticality:     {P_CRITICALITY}")
-    print(f"R range:          [{R_MIN}, {R_MAX}]")
+    print(f"P_HC:             {P_HC}")
+    print(f"Task count:       [m+1, {N_TASKS_FACTOR}*m]")
+    print(f"Period:           log-uniform [{PERIOD_MIN}, {PERIOD_MAX}]")
+    print(f"u range:          [{U_MIN}, {U_MAX}]")
     print(f"Lambda range:     [{LAMBDA_MIN}, {LAMBDA_MAX}]")
-    print(f"Period range:     [{PERIOD_MIN}, {PERIOD_MAX}]")
-    print(f"Tasks/proc range: [{N_TASKS_PER_PROC_MIN}, {N_TASKS_PER_PROC_MAX}]")
-    print(f"Util cap ratio:   [{UTIL_CAP_LO_RATIO}, {UTIL_CAP_HI_RATIO}]")
-    print(f"Util cap step:    0.1 × m")
+    print(f"UB_norm range:    [{UB_NORM_LO}, {UB_NORM_HI}], step={UB_NORM_STEP}")
 
     for m in PROCESSORS:
         print(f"\n{'=' * 60}")
@@ -586,21 +649,25 @@ def main():
 
         generator = IMCTaskSetGenerator(
             num_processors=m,
-            pCriticality=P_CRITICALITY,
-            R_range=(R_MIN, R_MAX),
-            lambda_range=(LAMBDA_MIN, LAMBDA_MAX),
+            p_hc=P_HC,
+            n_tasks_factor=N_TASKS_FACTOR,
             period_range=(PERIOD_MIN, PERIOD_MAX),
-            n_tasks_per_proc_range=(N_TASKS_PER_PROC_MIN, N_TASKS_PER_PROC_MAX),
-            seed=SEED + m   # different seed per processor count
+            u_min=U_MIN,
+            u_max=U_MAX,
+            lambda_range=(LAMBDA_MIN, LAMBDA_MAX),
+            u_hh_range=U_HH_RANGE,
+            u_hl_start=U_HL_START,
+            u_hl_step=U_HL_STEP,
+            seed=SEED + m
         )
 
         all_workloads = generator.generate_all(
             n_workloads=N_WORKLOADS,
-            util_cap_lo_ratio=UTIL_CAP_LO_RATIO,
-            util_cap_hi_ratio=UTIL_CAP_HI_RATIO
+            ub_lo=UB_NORM_LO,
+            ub_hi=UB_NORM_HI,
+            ub_step=UB_NORM_STEP
         )
 
-        # Export
         print(f"\nExporting results...")
         if OUTPUT_FORMAT in ("json", "both"):
             export_to_json(all_workloads, OUTPUT_DIR)
