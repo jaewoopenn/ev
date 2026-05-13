@@ -41,7 +41,7 @@ ALGO_STYLES = {
     "FFD":    {"marker": "o", "linestyle": "-",  "color": "#1f77b4"},
     "BFD":    {"marker": "s", "linestyle": "--", "color": "#ff7f0e"},
     "WFD":    {"marker": "^", "linestyle": "-.", "color": "#2ca02c"},
-    "CU-UDP": {"marker": "D", "linestyle": ":",  "color": "#d62728"},
+    "new_FF": {"marker": "D", "linestyle": ":",  "color": "#d62728"},
 }
 
 
