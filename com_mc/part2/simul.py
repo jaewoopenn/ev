@@ -142,6 +142,13 @@ def run_simulation(base_tasks, procs, sim_ticks, allow_migration):
                                 t["current_proc"] = p
                             # else: keep on current processor (permanent)
 
+                            # # Try to recover — only if p can accommodate
+                            # if p.try_add(t):
+                            #     t["current_proc"].remove(t)
+                            #     p.add(t)
+                            #     t["current_proc"] = p
+                            # # else: keep on current processor (permanent)
+
             if p.running_job is None and p.ready_queue:
                 p.ready_queue.sort(key=lambda j: j["deadline"])
                 p.running_job = p.ready_queue.pop(0)
