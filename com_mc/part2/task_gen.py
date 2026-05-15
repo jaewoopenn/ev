@@ -1,6 +1,7 @@
 import os
 import json
 import random
+import math
 
 # ============================================================
 # 멀티프로세서 워크로드 자동 생성
@@ -25,7 +26,15 @@ def generate_multiprocessor_workload(m, target_util_per_core):
                 u_lo_raw = u_base
                 u_hi_raw = random.uniform(0.001, u_lo_raw / 2.0)
                 
-            tasks.append({"crit": "HC" if is_hc else "LC", "u_LO": u_lo_raw, "u_HI": u_hi_raw})
+            # [10, 500] 구간에서 로그 균등 분포(log-uniform distribution)로 주기 생성
+            period =round(math.exp(random.uniform(math.log(10), math.log(500))))
+                
+            tasks.append({
+                "crit": "HC" if is_hc else "LC", 
+                "u_LO": u_lo_raw, 
+                "u_HI": u_hi_raw,
+                "period": period
+            })
             u_lo_sum += u_lo_raw
             u_hi_sum += u_hi_raw
         

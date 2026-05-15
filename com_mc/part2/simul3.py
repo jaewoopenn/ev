@@ -95,9 +95,9 @@ def partition_ffd_new(tasks, m):
     return procs
 
 # ============================================================
-# 2. 동적 시뮬레이터 (확률 파라미터 적용 및 Migration 순서 변경)
+# 2. 동적 시뮬레이터 (Migration ON vs OFF)
 # ============================================================
-def run_simulation(base_tasks, procs, sim_ticks, allow_migration, switch_prob):
+def run_simulation(base_tasks, procs, sim_ticks, allow_migration):
     runtime_tasks = copy.deepcopy(base_tasks)
     
     for rt_task in runtime_tasks:
@@ -145,8 +145,7 @@ def run_simulation(base_tasks, procs, sim_ticks, allow_migration, switch_prob):
                 if not p.running_job["started"]:
                     p.running_job["started"] = True
                     if p.running_job["task"]["crit"] == "HC" and p.mode == "LO":
-                        # 모드 스위치 확률 적용
-                        if random.random() < switch_prob:
+                        if random.random() < 0.20:
                             p.mode = "HI"
                             lc_tasks = [t for t in p.tasks if t["crit"] == "LC"]
                             
@@ -193,68 +192,66 @@ def run_simulation(base_tasks, procs, sim_ticks, allow_migration, switch_prob):
 # ============================================================
 def main():
     m_values = [2, 4, 8]
-    fixed_target = 0.70 # 데이터 타겟 고정
-    probs = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0] # 0.0 ~ 1.0
-    
+    targets = [0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
     data_dir = "/Users/jaewoo/data/com/data"
     result_dir = "/Users/jaewoo/data/com"
-    csv_file_path = os.path.join(result_dir, "imc_prob_simulation_results.csv")
+    csv_file_path = os.path.join(result_dir, "imc_simulation_results.csv")
     
+    # 파이썬 시뮬레이션 시간 단축을 위한 제한 (너무 오래 걸릴 수 있으므로 50개 셋, 1만 틱만 수행)
     max_sim_tests = 50
     sim_ticks = 10000 
 
     with open(csv_file_path, mode='w', newline='') as f:
         writer = csv.writer(f)
-        # Target 대신 Prob 컬럼 추가
-        writer.writerow(["m", "Prob", "Total_Jobs", "Degrade_ON_Ratio", "Degrade_OFF_Ratio"])
+        writer.writerow(["m", "Target", "Total_Jobs", "Degrade_ON_Ratio", "Degrade_OFF_Ratio"])
         
         for m in m_values:
-            file_path = os.path.join(data_dir, f"stasks_m_{m}_target_{fixed_target:.2f}.json")
-            if not os.path.exists(file_path): 
-                print(f"Data missing: {file_path}")
-                continue
+            for target in targets:
+                file_path = os.path.join(data_dir, f"stasks_m_{m}_target_{target:.2f}.json")
+                if not os.path.exists(file_path): continue
+                    
+                with open(file_path, 'r') as jf:
+                    all_tasks = json.load(jf)
                 
-            with open(file_path, 'r') as jf:
-                all_tasks = json.load(jf)
-            
-            # 비교의 공정성을 위해 시뮬레이션할 50개의 스케줄 가능한 태스크 셋을 미리 선별
-            schedulable_sets = []
-            for task_set in all_tasks:
-                procs_init = partition_ffd_new(copy.deepcopy(task_set), m)
-                if procs_init is not None:
-                    schedulable_sets.append(task_set)
-                if len(schedulable_sets) >= max_sim_tests:
-                    break
-
-            print(f"--- Evaluating m={m} (Target {fixed_target}) over various probabilities ---")
-            
-            # 각 확률별로 평가
-            for prob in probs:
+                sim_count = 0
                 acc_total_jobs_on = 0
                 acc_degrade_jobs_on = 0
                 acc_total_jobs_off = 0
                 acc_degrade_jobs_off = 0
                 
-                for task_set in schedulable_sets:
-                    # 동일한 시드를 부여하여 Job 도착 패턴을 최대한 유사하게 만듦
+                print(f"Running simulation for m={m}, Target={target:.2f}...")
+                
+                for task_set in all_tasks:
+                    if sim_count >= max_sim_tests: break
+                    
+                    # 파티셔닝 가능 여부 확인
+                    procs_init = partition_ffd_new(copy.deepcopy(task_set), m)
+                    if procs_init is None: continue
+                    
+                    # Migration ON 시뮬레이션
                     random.seed(42)
                     procs_on = partition_ffd_new(copy.deepcopy(task_set), m)
-                    t_on, d_on = run_simulation(task_set, procs_on, sim_ticks, True, prob)
+                    t_on, d_on = run_simulation(task_set, procs_on, sim_ticks, allow_migration=True)
                     
+                    # Migration OFF 시뮬레이션
                     random.seed(42)
                     procs_off = partition_ffd_new(copy.deepcopy(task_set), m)
-                    t_off, d_off = run_simulation(task_set, procs_off, sim_ticks, False, prob)
+                    t_off, d_off = run_simulation(task_set, procs_off, sim_ticks, allow_migration=False)
                     
                     acc_total_jobs_on += t_on
                     acc_degrade_jobs_on += d_on
                     acc_total_jobs_off += t_off
                     acc_degrade_jobs_off += d_off
+                    
+                    sim_count += 1
                 
                 if acc_total_jobs_on > 0:
                     ratio_on = (acc_degrade_jobs_on / acc_total_jobs_on) * 100
                     ratio_off = (acc_degrade_jobs_off / acc_total_jobs_off) * 100
-                    writer.writerow([m, prob, acc_total_jobs_on, ratio_on, ratio_off])
-                    print(f"Prob={prob:.1f} -> ON: {ratio_on:.2f}%, OFF: {ratio_off:.2f}%")
+                    writer.writerow([m, target, acc_total_jobs_on, ratio_on, ratio_off])
+                    print(f" -> Result: ON={ratio_on:.2f}%, OFF={ratio_off:.2f}%")
+                else:
+                    print(" -> No schedulable sets found.")
 
 if __name__ == "__main__":
     main()
