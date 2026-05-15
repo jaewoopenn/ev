@@ -35,7 +35,7 @@ def main():
         plt.plot(data["probs"], data["rates_off"], marker='x', linestyle='--', color='red', linewidth=2, label='Migration OFF')
         plt.plot(data["probs"], data["rates_on"], marker='o', linestyle='-', color='blue', linewidth=2, label='Migration ON')
 
-        plt.title(f'IMC Multiprocessor (m={m}, Util=0.8) - Mode Switch Prob vs Degradation', fontsize=14)
+        plt.title(f'IMC Multiprocessor (m={m}, Util=0.7) - Mode Switch Prob vs Degradation', fontsize=14)
         plt.xlabel('Mode Switch Probability (HC Task Start)', fontsize=12)
         plt.ylabel('Degraded Job Ratio (%)', fontsize=12)
         plt.legend(fontsize=12)

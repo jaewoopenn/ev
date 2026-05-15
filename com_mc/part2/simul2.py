@@ -95,7 +95,7 @@ def partition_ffd_new(tasks, m):
     return procs
 
 # ============================================================
-# 2. 동적 시뮬레이터 (확률 파라미터 적용)
+# 2. 동적 시뮬레이터 (확률 파라미터 적용 및 Migration 순서 변경)
 # ============================================================
 def run_simulation(base_tasks, procs, sim_ticks, allow_migration, switch_prob):
     runtime_tasks = copy.deepcopy(base_tasks)
@@ -150,6 +150,9 @@ def run_simulation(base_tasks, procs, sim_ticks, allow_migration, switch_prob):
                             p.mode = "HI"
                             lc_tasks = [t for t in p.tasks if t["crit"] == "LC"]
                             
+                            # --- 변경된 부분: util(u_LO)이 낮은 순서대로 정렬 ---
+                            lc_tasks.sort(key=lambda t: t["u_LO"])
+                            
                             for lc_task in lc_tasks:
                                 if allow_migration:
                                     migrated = False
@@ -190,7 +193,7 @@ def run_simulation(base_tasks, procs, sim_ticks, allow_migration, switch_prob):
 # ============================================================
 def main():
     m_values = [2, 4, 8]
-    fixed_target = 0.80 # 데이터 타겟 고정
+    fixed_target = 0.70 # 데이터 타겟 고정
     probs = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0] # 0.0 ~ 1.0
     
     data_dir = "/Users/jaewoo/data/com/data"
@@ -199,7 +202,6 @@ def main():
     
     max_sim_tests = 50
     sim_ticks = 10000 
-    periods = [20, 50, 100, 200]
 
     with open(csv_file_path, mode='w', newline='') as f:
         writer = csv.writer(f)
@@ -218,12 +220,6 @@ def main():
             # 비교의 공정성을 위해 시뮬레이션할 50개의 스케줄 가능한 태스크 셋을 미리 선별
             schedulable_sets = []
             for task_set in all_tasks:
-                for i, t in enumerate(task_set):
-                    t["id"] = i
-                    t["period"] = random.choice(periods)
-                    t["c_LO"] = max(1, int(t["u_LO"] * t["period"]))
-                    t["c_HI"] = max(1, int(t["u_HI"] * t["period"]))
-                
                 procs_init = partition_ffd_new(copy.deepcopy(task_set), m)
                 if procs_init is not None:
                     schedulable_sets.append(task_set)

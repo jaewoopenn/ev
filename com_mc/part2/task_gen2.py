@@ -2,6 +2,10 @@ import os
 import json
 import random
 import copy
+import math
+
+# 스케줄 가능한 태스크셋 생성
+# stask 
 
 # ============================================================
 # 1. 스케줄러빌리티 수식 및 프로세서 클래스 (new_FF)
@@ -124,8 +128,6 @@ def generate_multiprocessor_workload(m, target_util_per_core):
 # 3. 스케줄 가능한 태스크 셋만 필터링하여 생성
 # ============================================================
 def generate_valid_task_set(m, target):
-    periods = [20, 50, 100, 200]
-    
     while True:
         # 1. 기본 태스크 생성
         raw_tasks = generate_multiprocessor_workload(m, target)
@@ -133,7 +135,9 @@ def generate_valid_task_set(m, target):
         # 2. 시뮬레이션용 파라미터(id, period, c_LO, c_HI) 주입 및 U 보정
         for i, t in enumerate(raw_tasks):
             t["id"] = i
-            t["period"] = random.choice(periods)
+            # [10, 500] 구간에서 로그 균등 분포로 생성 후 정수로 반올림
+            t["period"] = round(math.exp(random.uniform(math.log(10), math.log(500))))
+            
             # Tick 단위의 정수 실행 시간 계산
             t["c_LO"] = max(1, int(t["u_LO"] * t["period"]))
             t["c_HI"] = max(1, int(t["u_HI"] * t["period"]))
