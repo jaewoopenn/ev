@@ -82,7 +82,7 @@ def main():
             plt.legend(fontsize=14)
             plt.grid(True, linestyle=':', alpha=0.7)
             plt.xticks(data["p_h_values"])
-            plt.ylim(0, 105)
+            plt.ylim(70, 105)
             plt.tight_layout()
             pdf_file_path = os.path.join(result_dir, f"simulation_ph_plot_m_{m}.pdf")
             plt.savefig(pdf_file_path, format='pdf')

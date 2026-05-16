@@ -45,8 +45,8 @@ def main():
         
         # 3. 아래쪽 그래프 (ax2): Migration Single, Chain 데이터
         # 참고 이미지에 맞춰 마커와 선 스타일, 색상 변경
-        line2 = ax2.plot(alpha_pct, data["degrade_single"], marker='o', linestyle='-', color='tab:blue', linewidth=2, label='Single')
-        line3 = ax2.plot(alpha_pct, data["degrade_chain"], marker='^', linestyle='-', color='tab:green', linewidth=2, label='Chain')
+        line2 = ax2.plot(alpha_pct, data["degrade_single"], marker='o', linestyle='-', color='tab:blue', linewidth=2, label='Migration Single')
+        line3 = ax2.plot(alpha_pct, data["degrade_chain"], marker='^', linestyle='-', color='tab:green', linewidth=2, label='Migration Chain')
         bot_min = min(min(data["degrade_single"]), min(data["degrade_chain"]))
         bot_max = max(max(data["degrade_single"]), max(data["degrade_chain"]))
         ax2.set_ylim(bot_min - 0.1, bot_max + 0.1)
