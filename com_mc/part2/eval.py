@@ -110,48 +110,85 @@ def partition_cu_udp_original(tasks, m):
     return True
 
 # ============================================================
-# 평가 및 파일 저장
+# 단일 데이터셋 평가 함수
+# ============================================================
+def evaluate_dataset(all_tasks, m):
+    num_tests = len(all_tasks)
+    acc_orig = sum(1 for tasks in all_tasks if partition_ffd_original(tasks, m))
+    acc_ffd_new = sum(1 for tasks in all_tasks if partition_ffd_new(tasks, m))
+    acc_mb_new = sum(1 for tasks in all_tasks if partition_mb_new(tasks, m))
+    acc_cu_udp_orig = sum(1 for tasks in all_tasks if partition_cu_udp_original(tasks, m))
+    
+    r_orig = (acc_orig / num_tests) * 100
+    r_ffd_new = (acc_ffd_new / num_tests) * 100
+    r_mb_new = (acc_mb_new / num_tests) * 100
+    r_cu_udp_orig = (acc_cu_udp_orig / num_tests) * 100
+    
+    return r_orig, r_ffd_new, r_mb_new, r_cu_udp_orig
+
+# ============================================================
+# 메인: 평가 및 파일 저장
 # ============================================================
 def main():
     m_values = [2, 4, 8]
     targets = [0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
+    p_h_values = [0.1, 0.3, 0.5, 0.7, 0.9]
     data_dir = "/Users/jaewoo/data/com/data"
     result_dir = "/Users/jaewoo/data/com"
     os.makedirs(result_dir, exist_ok=True)
     
+    # ============================================================
+    # 1. 기존: Utilization variation (P_H = 0.5 고정)
+    # ============================================================
     csv_file_path = os.path.join(result_dir, "simulation_results.csv")
     
     with open(csv_file_path, mode='w', newline='') as f:
         writer = csv.writer(f)
-        # CSV 헤더에 'm' 컬럼 추가
         writer.writerow(["m", "Target", "FFD_Orig_Rate", "FFD_New_Rate", "MB_New_Rate", "CU_UDP_Orig_Rate"])
         
         for m in m_values:
-            print(f"\n>>> Evaluating algorithms for m={m}")
+            print(f"\n>>> [Util variation] Evaluating for m={m}")
             for target in targets:
                 file_path = os.path.join(data_dir, f"tasks_m_{m}_target_{target:.2f}.json")
                 if not os.path.exists(file_path):
-                    print(f"Data missing: {file_path}")
+                    print(f"  Data missing: {file_path}")
                     continue
                     
                 with open(file_path, 'r') as jf:
                     all_tasks = json.load(jf)
-                    
-                num_tests = len(all_tasks)
-                acc_orig = sum(1 for tasks in all_tasks if partition_ffd_original(tasks, m))
-                acc_ffd_new = sum(1 for tasks in all_tasks if partition_ffd_new(tasks, m))
-                acc_mb_new = sum(1 for tasks in all_tasks if partition_mb_new(tasks, m))
-                acc_cu_udp_orig = sum(1 for tasks in all_tasks if partition_cu_udp_original(tasks, m))
                 
-                r_orig = (acc_orig / num_tests) * 100
-                r_ffd_new = (acc_ffd_new / num_tests) * 100
-                r_mb_new = (acc_mb_new / num_tests) * 100
-                r_cu_udp_orig = (acc_cu_udp_orig / num_tests) * 100
-                
+                r_orig, r_ffd_new, r_mb_new, r_cu_udp_orig = evaluate_dataset(all_tasks, m)
                 writer.writerow([m, target, r_orig, r_ffd_new, r_mb_new, r_cu_udp_orig])
-                print(f"Target {target:.2f} evaluated.")
-            
-    print(f"\nAll evaluations complete. CSV saved to: {csv_file_path}")
+                print(f"  Target {target:.2f} done.")
+    
+    print(f"\nUtil variation saved to: {csv_file_path}")
+    
+    # ============================================================
+    # 2. 추가: P_H variation (Target util = 0.80 고정)
+    # ============================================================
+    csv_ph_path = os.path.join(result_dir, "simulation_ph_results.csv")
+    
+    with open(csv_ph_path, mode='w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(["m", "P_H", "FFD_Orig_Rate", "FFD_New_Rate", "MB_New_Rate", "CU_UDP_Orig_Rate"])
+        
+        for m in m_values:
+            print(f"\n>>> [P_H variation] Evaluating for m={m}")
+            for p_h in p_h_values:
+                file_path = os.path.join(data_dir, f"tasks_m_{m}_ph_{p_h:.1f}.json")
+                if not os.path.exists(file_path):
+                    print(f"  Data missing: {file_path}")
+                    continue
+                    
+                with open(file_path, 'r') as jf:
+                    all_tasks = json.load(jf)
+                
+                r_orig, r_ffd_new, r_mb_new, r_cu_udp_orig = evaluate_dataset(all_tasks, m)
+                writer.writerow([m, p_h, r_orig, r_ffd_new, r_mb_new, r_cu_udp_orig])
+                print(f"  P_H {p_h:.1f} done.")
+    
+    print(f"\nP_H variation saved to: {csv_ph_path}")
+    print("\nAll evaluations complete.")
 
 if __name__ == "__main__":
     main()
