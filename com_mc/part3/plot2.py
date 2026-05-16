@@ -41,10 +41,10 @@ def main():
         plt.plot(data["targets"], data["degrade_single"], marker='o', linestyle='-', color='blue', linewidth=2, label='Migration Single')
         plt.plot(data["targets"], data["degrade_chain"], marker='^', linestyle='-.', color='green', linewidth=2, label='Migration Chain')
 
-        plt.title(f'IMC Multiprocessor (m={m}) Degradation Ratio Comparison', fontsize=14)
-        plt.xlabel('Target Utilization / Core', fontsize=12)
-        plt.ylabel('Degraded Job Ratio (%)', fontsize=12)
-        plt.legend(fontsize=12)
+        # plt.title(f'IMC Multiprocessor (m={m}) Degradation Ratio Comparison', fontsize=14)
+        plt.xlabel('Target Utilization / Core', fontsize=14)
+        plt.ylabel('Degraded Job Ratio (%)', fontsize=14)
+        plt.legend(fontsize=14)
         plt.grid(True, linestyle=':', alpha=0.7)
         plt.xticks(data["targets"])
         

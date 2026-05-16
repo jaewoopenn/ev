@@ -95,10 +95,25 @@ def partition_ffd_new(tasks, m):
     return procs
 
 # ============================================================
-# 2. 동적 시뮬레이터
-#    mig_mode: "off", "single", "chain"
+# 2. 마이그레이션용 인플레이션 태스크 생성
+#    - u_LO (active utilization)만 (1+alpha) 배
+#    - u_HI (degraded/mandatory utilization)는 그대로
 # ============================================================
-def run_simulation(base_tasks, procs, sim_ticks, mig_mode):
+def make_inflated_task(task, alpha):
+    """마이그레이션 수락 검사 및 add용으로 u_LO를 인플레이션한 태스크 복사본 생성"""
+    inflated = dict(task)  # shallow copy (home_proc, current_proc 등 참조 유지)
+    inflated["u_LO"] = task["u_LO"] * (1.0 + alpha)
+    # c_LO도 인플레이션 (rem_LO 계산에 사용될 수 있으므로)
+    inflated["c_LO"] = task["c_LO"] * (1.0 + alpha)
+    # u_HI, c_HI (mandatory/degraded)는 그대로 유지
+    return inflated
+
+# ============================================================
+# 3. 동적 시뮬레이터
+#    mig_mode: "off", "single", "chain"
+#    mig_alpha: 마이그레이션 오버헤드 비율 (0.0 = no overhead)
+# ============================================================
+def run_simulation(base_tasks, procs, sim_ticks, mig_mode, switch_prob, mig_alpha=0.0):
     runtime_tasks = copy.deepcopy(base_tasks)
     
     for rt_task in runtime_tasks:
@@ -106,6 +121,9 @@ def run_simulation(base_tasks, procs, sim_ticks, mig_mode):
         proc = next(p for p in procs if p.id == original_proc_id)
         rt_task["home_proc"] = proc
         rt_task["current_proc"] = proc
+        # 원본 utilization 보존 (recovery 시 복원용)
+        rt_task["orig_u_LO"] = rt_task["u_LO"]
+        rt_task["orig_c_LO"] = rt_task["c_LO"]
 
     allow_migration = (mig_mode != "off")
     use_chain = (mig_mode == "chain")
@@ -140,6 +158,9 @@ def run_simulation(base_tasks, procs, sim_ticks, mig_mode):
                     for t in runtime_tasks:
                         if t["home_proc"] == p and t["current_proc"] != p:
                             t["current_proc"].remove(t)
+                            # Recovery 시 원본 utilization으로 복원
+                            t["u_LO"] = t["orig_u_LO"]
+                            t["c_LO"] = t["orig_c_LO"]
                             p.add(t)
                             t["current_proc"] = p
 
@@ -150,34 +171,51 @@ def run_simulation(base_tasks, procs, sim_ticks, mig_mode):
                 if not p.running_job["started"]:
                     p.running_job["started"] = True
                     if p.running_job["task"]["crit"] == "HC" and p.mode == "LO":
-                        if random.random() < 0.20:
+                        if random.random() < switch_prob:
                             p.mode = "HI"
                             
                             # Key difference: single vs chain
+                            # single: home_proc 기준 (원래 할당된 LC 태스크만)
+                            # chain:  current_proc 기준 (이전에 마이그레이션된 태스크 포함)
                             if use_chain:
-                                # Chain: find LC tasks by current_proc (includes migrated-in tasks)
                                 lc_tasks = sorted(
                                     [t for t in runtime_tasks if t["crit"] == "LC" and t["current_proc"] == p],
                                     key=lambda t: t["u_LO"]
                                 )
                             else:
-                                # Single: only original tasks on this processor
                                 lc_tasks = sorted(
-                                    [t for t in p.tasks if t["crit"] == "LC"],
+                                    [t for t in runtime_tasks if t["crit"] == "LC" and t["home_proc"] == p],
                                     key=lambda t: t["u_LO"]
                                 )
                             
                             for lc_task in lc_tasks:
                                 if allow_migration:
                                     migrated = False
+                                    
+                                    # ---- 오버헤드 반영: 인플레이션된 태스크로 수락 검사 ----
+                                    if mig_alpha > 0.0:
+                                        inflated = make_inflated_task(lc_task, mig_alpha)
+                                    else:
+                                        inflated = lc_task
+                                    
                                     for target_p in procs:
-                                        if target_p != p and target_p.mode == "LO" and target_p.try_add(lc_task):
+                                        if target_p != p and target_p.mode == "LO" and target_p.try_add(inflated):
                                             p.remove(lc_task)
+                                            
+                                            # ---- 오버헤드 반영: 인플레이션된 utilization으로 add ----
+                                            if mig_alpha > 0.0:
+                                                lc_task["u_LO"] = lc_task["orig_u_LO"] * (1.0 + mig_alpha)
+                                                lc_task["c_LO"] = lc_task["orig_c_LO"] * (1.0 + mig_alpha)
+                                            
                                             target_p.add(lc_task)
                                             lc_task["current_proc"] = target_p
                                             
+                                            # 대기 중인 job들 이동 + rem_LO에 패널티 적용
                                             jobs_to_move = [j for j in p.ready_queue if j["task"]["id"] == lc_task["id"]]
                                             p.ready_queue = [j for j in p.ready_queue if j["task"]["id"] != lc_task["id"]]
+                                            if mig_alpha > 0.0:
+                                                for j in jobs_to_move:
+                                                    j["rem_LO"] += lc_task["orig_c_LO"] * mig_alpha
                                             target_p.ready_queue.extend(jobs_to_move)
                                             migrated = True
                                             break
@@ -203,66 +241,66 @@ def run_simulation(base_tasks, procs, sim_ticks, mig_mode):
     return total_jobs_spawned, degraded_jobs_count
 
 # ============================================================
-# 3. 메인 실행부
+# 4. 메인 실행부 - 마이그레이션 오버헤드 민감도 분석
 # ============================================================
 def main():
     m_values = [2, 4, 8]
-    targets = [0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
+    fixed_target = 0.70
+    fixed_switch_prob = 0.2          # 모드 스위치 확률 고정
+    alphas = [0.0, 0.01, 0.03, 0.05, 0.10]  # 오버헤드 비율: 0%, 1%, 3%, 5%, 10%
+    
     data_dir = "/Users/jaewoo/data/com/data"
     result_dir = "/Users/jaewoo/data/com"
-    csv_file_path = os.path.join(result_dir, "imc_simulation_3way_results.csv")
+    csv_file_path = os.path.join(result_dir, "imc_overhead_results.csv")
     
     max_sim_tests = 1000
     sim_ticks = 10000 
-    periods = [20, 50, 100, 200]
 
     with open(csv_file_path, mode='w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(["m", "Target", "Total_Jobs", 
+        writer.writerow(["m", "Alpha", "Total_Jobs", 
                          "Degrade_OFF", "Degrade_Single", "Degrade_Chain"])
         
         for m in m_values:
-            for target in targets:
-                file_path = os.path.join(data_dir, f"stasks_m_{m}_target_{target:.2f}.json")
-                if not os.path.exists(file_path): continue
-                    
-                with open(file_path, 'r') as jf:
-                    all_tasks = json.load(jf)
+            file_path = os.path.join(data_dir, f"stasks_m_{m}_target_{fixed_target:.2f}.json")
+            if not os.path.exists(file_path): 
+                print(f"Data missing: {file_path}")
+                continue
                 
-                sim_count = 0
+            with open(file_path, 'r') as jf:
+                all_tasks = json.load(jf)
+            
+            schedulable_sets = []
+            for task_set in all_tasks:
+                procs_init = partition_ffd_new(copy.deepcopy(task_set), m)
+                if procs_init is not None:
+                    schedulable_sets.append(task_set)
+                if len(schedulable_sets) >= max_sim_tests:
+                    break
+
+            print(f"--- Evaluating m={m} (Target {fixed_target}, P_MS={fixed_switch_prob}) over various alphas ---")
+            
+            for alpha in alphas:
                 acc = {mode: {"total": 0, "degrade": 0} for mode in ["off", "single", "chain"]}
                 
-                print(f"Running simulation for m={m}, Target={target:.2f}...")
-                
-                for task_set in all_tasks:
-                    if sim_count >= max_sim_tests: break
-                    
-                    for i, t in enumerate(task_set):
-                        t["id"] = i
-                        t["period"] = random.choice(periods)
-                        t["c_LO"] = max(1, int(t["u_LO"] * t["period"]))
-                        t["c_HI"] = max(1, int(t["u_HI"] * t["period"]))
-                    
-                    procs_init = partition_ffd_new(copy.deepcopy(task_set), m)
-                    if procs_init is None: continue
-                    
+                for task_set in schedulable_sets:
                     for mode in ["off", "single", "chain"]:
                         random.seed(42)
                         procs_run = partition_ffd_new(copy.deepcopy(task_set), m)
-                        t_total, d_total = run_simulation(task_set, procs_run, sim_ticks, mig_mode=mode)
+                        t_total, d_total = run_simulation(
+                            task_set, procs_run, sim_ticks, 
+                            mig_mode=mode, switch_prob=fixed_switch_prob,
+                            mig_alpha=alpha
+                        )
                         acc[mode]["total"] += t_total
                         acc[mode]["degrade"] += d_total
-                    
-                    sim_count += 1
                 
                 if acc["off"]["total"] > 0:
                     r_off = (acc["off"]["degrade"] / acc["off"]["total"]) * 100
                     r_single = (acc["single"]["degrade"] / acc["single"]["total"]) * 100
                     r_chain = (acc["chain"]["degrade"] / acc["chain"]["total"]) * 100
-                    writer.writerow([m, target, acc["off"]["total"], r_off, r_single, r_chain])
-                    print(f" -> OFF={r_off:.2f}%, Single={r_single:.2f}%, Chain={r_chain:.2f}%")
-                else:
-                    print(" -> No schedulable sets found.")
+                    writer.writerow([m, alpha, acc["off"]["total"], r_off, r_single, r_chain])
+                    print(f"Alpha={alpha:.2f} -> OFF={r_off:.2f}%, Single={r_single:.2f}%, Chain={r_chain:.2f}%")
 
 if __name__ == "__main__":
     main()

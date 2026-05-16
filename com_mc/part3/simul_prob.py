@@ -212,7 +212,7 @@ def main():
     result_dir = "/Users/jaewoo/data/com"
     csv_file_path = os.path.join(result_dir, "imc_prob_3way_results.csv")
     
-    max_sim_tests = 50
+    max_sim_tests = 1000
     sim_ticks = 10000 
 
     with open(csv_file_path, mode='w', newline='') as f:
