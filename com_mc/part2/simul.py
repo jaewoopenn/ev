@@ -5,7 +5,7 @@ import random
 import copy
 
 # ============================================================
-# 1. 스케줄러빌리티 수식 및 프로세서 클래스
+# 1. 스케줄러빌리티 수식 및 프로세서 클래스 (new_FF)
 # ============================================================
 def compute_x_max(U_LC_A: float, U_LC_D: float, U_HC_H: float):
     denom = U_LC_A - U_LC_D
@@ -95,7 +95,7 @@ def partition_ffd_new(tasks, m):
     return procs
 
 # ============================================================
-# 2. 동적 시뮬레이터 — Selective Recovery
+# 2. 동적 시뮬레이터 (Migration ON vs OFF)
 # ============================================================
 def run_simulation(base_tasks, procs, sim_ticks, allow_migration):
     runtime_tasks = copy.deepcopy(base_tasks)
@@ -129,7 +129,6 @@ def run_simulation(base_tasks, procs, sim_ticks, allow_migration):
                    (p.mode == "HI" and p.running_job["rem_HI"] <= 0):
                     p.running_job = None
 
-            # Selective Recovery: idle → LO mode, try to recover tasks
             if p.running_job is None and len(p.ready_queue) == 0 and p.mode == "HI":
                 p.mode = "LO"
                 if allow_migration:
@@ -142,13 +141,6 @@ def run_simulation(base_tasks, procs, sim_ticks, allow_migration):
                                 t["current_proc"] = p
                             # else: keep on current processor (permanent)
 
-                            # # Try to recover — only if p can accommodate
-                            # if p.try_add(t):
-                            #     t["current_proc"].remove(t)
-                            #     p.add(t)
-                            #     t["current_proc"] = p
-                            # # else: keep on current processor (permanent)
-
             if p.running_job is None and p.ready_queue:
                 p.ready_queue.sort(key=lambda j: j["deadline"])
                 p.running_job = p.ready_queue.pop(0)
@@ -158,12 +150,7 @@ def run_simulation(base_tasks, procs, sim_ticks, allow_migration):
                     if p.running_job["task"]["crit"] == "HC" and p.mode == "LO":
                         if random.random() < 0.20:
                             p.mode = "HI"
-                            
-                            # LC tasks sorted by util ascending
-                            lc_tasks = sorted(
-                                [t for t in runtime_tasks if t["crit"] == "LC" and t["current_proc"] == p],
-                                key=lambda t: t["u_LO"]
-                            )
+                            lc_tasks = [t for t in p.tasks if t["crit"] == "LC"]
                             
                             for lc_task in lc_tasks:
                                 if allow_migration:
@@ -210,6 +197,7 @@ def main():
     result_dir = "/Users/jaewoo/data/com"
     csv_file_path = os.path.join(result_dir, "imc_simulation_results.csv")
     
+    # 파이썬 시뮬레이션 시간 단축을 위한 제한 (너무 오래 걸릴 수 있으므로 50개 셋, 1만 틱만 수행)
     max_sim_tests = 50
     sim_ticks = 10000 
     periods = [20, 50, 100, 200]
@@ -237,21 +225,23 @@ def main():
                 for task_set in all_tasks:
                     if sim_count >= max_sim_tests: break
                     
+                    # 1번 스크립트 데이터에 동적 시뮬레이션을 위한 파라미터 주입
                     for i, t in enumerate(task_set):
                         t["id"] = i
                         t["period"] = random.choice(periods)
                         t["c_LO"] = max(1, int(t["u_LO"] * t["period"]))
                         t["c_HI"] = max(1, int(t["u_HI"] * t["period"]))
                     
+                    # 파티셔닝 가능 여부 확인
                     procs_init = partition_ffd_new(copy.deepcopy(task_set), m)
                     if procs_init is None: continue
                     
-                    # Migration ON (selective recovery)
+                    # Migration ON 시뮬레이션
                     random.seed(42)
                     procs_on = partition_ffd_new(copy.deepcopy(task_set), m)
                     t_on, d_on = run_simulation(task_set, procs_on, sim_ticks, allow_migration=True)
                     
-                    # Migration OFF
+                    # Migration OFF 시뮬레이션
                     random.seed(42)
                     procs_off = partition_ffd_new(copy.deepcopy(task_set), m)
                     t_off, d_off = run_simulation(task_set, procs_off, sim_ticks, allow_migration=False)
