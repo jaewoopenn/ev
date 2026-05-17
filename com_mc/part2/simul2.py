@@ -95,11 +95,15 @@ def partition_ffd_new(tasks, m):
     return procs
 
 # ============================================================
+<<<<<<< HEAD
 <<<<<<< Upstream, based on origin/master
 # 2. 동적 시뮬레이터 — Selective Recovery
 =======
 # 2. 동적 시뮬레이터 (확률 파라미터 적용 및 Migration 순서 변경)
 >>>>>>> 2bc0a18 asdasd
+=======
+# 2. 동적 시뮬레이터 (확률 파라미터 적용 및 Migration 순서 변경)
+>>>>>>> branch 'sad' of https://github.com/jaewoopenn/ev.git
 # ============================================================
 def run_simulation(base_tasks, procs, sim_ticks, allow_migration):
     runtime_tasks = copy.deepcopy(base_tasks)
@@ -165,6 +169,9 @@ def run_simulation(base_tasks, procs, sim_ticks, allow_migration):
                             # --- 변경된 부분: util(u_LO)이 낮은 순서대로 정렬 ---
                             lc_tasks.sort(key=lambda t: t["u_LO"])
                             
+                            # --- 변경된 부분: util(u_LO)이 낮은 순서대로 정렬 ---
+                            lc_tasks.sort(key=lambda t: t["u_LO"])
+                            
                             for lc_task in lc_tasks:
                                 if allow_migration:
                                     migrated = False
@@ -205,9 +212,12 @@ def run_simulation(base_tasks, procs, sim_ticks, allow_migration):
 # ============================================================
 def main():
     m_values = [2, 4, 8]
+<<<<<<< HEAD
 <<<<<<< Upstream, based on origin/master
     targets = [0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
 =======
+=======
+>>>>>>> branch 'sad' of https://github.com/jaewoopenn/ev.git
     fixed_target = 0.70 # 데이터 타겟 고정
     probs = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0] # 0.0 ~ 1.0
     

@@ -27,11 +27,15 @@ def generate_multiprocessor_workload(m, target_util_per_core, p_h=0.5):
                 u_hi_raw = random.uniform(0.001, u_lo_raw / 2.0)
                 
             # [10, 500] 구간에서 로그 균등 분포(log-uniform distribution)로 주기 생성
+<<<<<<< HEAD
 <<<<<<< Upstream, based on origin/master
             period = round(math.exp(random.uniform(math.log(10), math.log(500))))
 =======
             period =round(math.exp(random.uniform(math.log(10), math.log(500))))
 >>>>>>> 2bc0a18 asdasd
+=======
+            period =round(math.exp(random.uniform(math.log(10), math.log(500))))
+>>>>>>> branch 'sad' of https://github.com/jaewoopenn/ev.git
                 
             tasks.append({
                 "crit": "HC" if is_hc else "LC", 
