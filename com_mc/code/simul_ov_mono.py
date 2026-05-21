@@ -67,10 +67,11 @@ import random
 import statistics
 import importlib.util
 
-
-def _load_module(path, modname):
-    """원본 .py 를 경로로 import. 임포트 시 원본 main() 자동 실행만 차단."""
-    src = open(path).read()
+def load_original(sim_path):
+    spec = importlib.util.spec_from_file_location("simul_unified3", sim_path)
+    mod = importlib.util.module_from_spec(spec)
+    # Prevent the original main() from executing on import.
+    src = open(sim_path).read()
     src = src.replace('if __name__ == "__main__":\n    main()',
                        'if __name__ == "__main__":\n    pass')
     spec = importlib.util.spec_from_loader(modname, loader=None)
