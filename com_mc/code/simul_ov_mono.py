@@ -6,7 +6,7 @@ CONFIG = {
     # 원본 파일 경로 -- 본인 환경에 맞게 이 두 줄만 맞춰주세요.
     # (두 파일 모두 그대로 import 해서 로직 재사용. 원본 수정 안 함.
     #  이 스크립트와 같은 폴더에 두면 아래 기본값 그대로 실행 가능.)
-    "SIM_PATH":  "simul_unified2.py",
+    "SIM_PATH":  "simul_unified4.py",
     "GEN_PATH":  "stask_gen.py",
 
     # 실험 규모
@@ -17,10 +17,6 @@ CONFIG = {
     "MAX_SETS":    100,                             # m당 태스크셋 수 (논문 1000; 줄이면 빠름)
     "SIM_TICKS":   10000,                           # 논문과 동일
     "N_SEEDS":     30,                              # 독립 mode-switch 시드 반복 (핵심)
-    # 대략적 실행 시간(단일 코어 기준): MAX_SETS=100,N_SEEDS=30 일 때
-    #   m=2 ~3분, m=4 ~5분, m=8 ~12분  => 합계 약 20분.
-    #   더 빠르게: MAX_SETS=50, N_SEEDS=20 (합계 ~7분, 검정력은 다소 하락)
-    #   논문 규모: MAX_SETS=1000 (수 시간) — 통상 불필요. seed 수가 핵심.
 
     # 재현용 고정 시드
     "WL_SEED":      20260518,   # 워크로드 생성 시드 (m마다 +m 됨)
@@ -35,29 +31,6 @@ CONFIG = {
 # ===========================================================================
 #  이 아래로는 수정할 필요 없습니다.
 # ===========================================================================
-#
-#  목적
-#  ----
-#  원본 simul_unified2.py 는 태스크셋마다 random.seed(42) 로 고정한 뒤
-#  태스크셋들을 SUM 하여 (m, alpha) 당 단일 비율 하나만 냅니다. 분산이
-#  없으므로 Migration NoRec 의 alpha 에 대한 작은(~0.2%p) 비단조성이
-#  통계적으로 유의한지 검정할 수 없습니다.
-#
-#  이 스크립트는:
-#   * 원본 stask_gen.py 의 generate_valid_task_set 으로 워크로드 생성
-#     (논문 4.1절 절차와 정확히 동일 — 임의 재구현이 아님),
-#   * 원본 simul_unified2.py 의 스케줄링/마이그레이션/복구 로직을 그대로
-#     import 해서 사용,
-#   * 바깥 루프만 변경: mode-switch RNG 를 매 realization 마다 다른
-#     시드로 재시드 → 시드별 degraded job ratio 를 표본으로 수집 →
-#     동일 워크로드에 대한 paired bootstrap 95% CI 로 NoRec 의
-#     alpha=0 -> alpha=1% 변화("the rise")가 유의한지 검정.
-#
-#  정직성 메모: 두 원본 파일을 그대로 쓰므로 워크로드 분포는 논문과
-#  동일하다. 다만 원본 simul 은 set 별 seed(42) 고정·합산이라 "단일
-#  실현"이고, 이 스크립트는 그 단일 실현을 시드 반복으로 분포화한 것이다.
-#  따라서 특정 시드의 절대 DJR 은 논문 Fig.7 값과 다를 수 있다. 답하려는
-#  질문(비단조성이 시드 변동보다 큰가)은 절대값과 무관하므로 결론은 유효.
 
 import os
 import sys
@@ -67,17 +40,19 @@ import random
 import statistics
 import importlib.util
 
-def load_original(sim_path):
-    spec = importlib.util.spec_from_file_location("simul_unified3", sim_path)
+def _load_module(path, modname):
+    """지정된 경로의 파이썬 스크립트를 동적으로 로드합니다."""
+    spec = importlib.util.spec_from_file_location(modname, path)
     mod = importlib.util.module_from_spec(spec)
-    # Prevent the original main() from executing on import.
-    src = open(sim_path).read()
+    
+    # 원본 파일의 main()이 import 시점에 실행되는 것을 방지
+    with open(path, "r", encoding="utf-8") as f:
+        src = f.read()
     src = src.replace('if __name__ == "__main__":\n    main()',
-                       'if __name__ == "__main__":\n    pass')
-    spec = importlib.util.spec_from_loader(modname, loader=None)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[modname] = mod
+                      'if __name__ == "__main__":\n    pass')
+    
     exec(compile(src, path, "exec"), mod.__dict__)
+    sys.modules[modname] = mod
     return mod
 
 
@@ -90,6 +65,19 @@ def build_prepared(gen, m, U_t, n_sets, wl_seed):
     for _ in range(n_sets):
         ts = gen.generate_valid_task_set(m, U_t)   # id/period/c_LO/c_HI 주입 포함
         prepared.append(copy.deepcopy(ts))
+        
+    # 태스크셋 데이터를 JSON 대신 CSV로 저장
+    csv_filename = f"tasksets_m{m}.csv"
+    with open(csv_filename, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Set_ID", "Task_ID", "Period", "C_LO", "C_HI"])
+        for set_id, ts_data in enumerate(prepared):
+            for task_id, task in enumerate(ts_data):
+                if hasattr(task, 'get'):
+                    writer.writerow([set_id, task_id, task.get('period', ''), task.get('c_LO', ''), task.get('c_HI', '')])
+                else:
+                    writer.writerow([set_id, task_id, getattr(task, 'period', ''), getattr(task, 'c_LO', ''), getattr(task, 'c_HI', '')])
+
     return prepared
 
 
@@ -147,14 +135,12 @@ def main():
     summary_rows = []
 
     for m in C["M_VALUES"]:
-        # 같은 m 에서는 모든 (alpha, seed) 가 동일 워크로드 공유 →
-        # alpha 만 변하는 paired 설계.
         prepared = build_prepared(gen, m, C["U_T"],
                                   C["MAX_SETS"], C["WL_SEED"] + m)
         if not prepared:
             print(f"[warn] m={m}: 워크로드 생성 실패", file=sys.stderr)
             continue
-        print(f"[info] m={m}: {len(prepared)}개 태스크셋 준비 완료",
+        print(f"[info] m={m}: {len(prepared)}개 태스크셋 준비 및 CSV 저장 완료",
               file=sys.stderr)
 
         norec = {a: [] for a in alphas}

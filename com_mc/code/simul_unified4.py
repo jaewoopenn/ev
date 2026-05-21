@@ -5,7 +5,7 @@ import random
 import copy
 
 # ============================================================
-#  통합 시뮬레이터 (Ablation Study 반영) 제미나이 작성/. 틀린 부분 있음 
+#  통합 시뮬레이터 (Ablation Study 반영) 클로드 작성/ 최종버전  
 #
 #  비교 모드 (mig_mode)
 #  ---------
@@ -30,31 +30,45 @@ def compute_x_max(U_LC_A: float, U_LC_D: float, U_HC_H: float):
     if x_max > 1.0: x_max = 1.0
     return x_max
 
-def is_schedulable_new(U_LC_A, U_HC_L, U_LC_D, U_HC_H, hc_tasks, lc_tasks, fixed_x=None):
-    if fixed_x is None:
-        # 오프라인 파티셔닝 단계: x를 동적으로 계산
-        x = compute_x_max(U_LC_A, U_LC_D, U_HC_H)
-        if x is None: return False
-    else:
-        # 런타임 Migration 단계: 고정된 x를 사용하여 Eq(7) 및 Eq(11) 만족 여부 검사
-        x = fixed_x
-        # HI-mode 조건 확인 (Eq. 7) -> 부동소수점 오차 방지를 위해 1e-9 여유분 허용
-        if (x * U_LC_A) + ((1.0 - x) * U_LC_D) + U_HC_H > 1.0 + 1e-9:
-            return False
-
+def is_schedulable_new(U_LC_A, U_HC_L, U_LC_D, U_HC_H, hc_tasks, lc_tasks):
+    x = compute_x_max(U_LC_A, U_LC_D, U_HC_H)
+    if x is None: return False
     lo_sum = U_LC_A
     for (u_l, u_h) in hc_tasks:
         if u_l / x >= u_h: lo_sum += u_h
         else: lo_sum += u_l / x
-    
-    # 부동소수점 오차 방지를 위해 1e-9 여유분 허용
-    return lo_sum <= 1.0 + 1e-9
+    return lo_sum <= 1.0
+
+
+def is_schedulable_fixed_x(x_star, U_LC_A, U_LC_D, U_HC_H, hc_tasks):
+    """Schedulability test at a fixed offline coefficient x_star.
+
+    Used by the runtime migration admission check; does NOT recompute x_max.
+    This matches the paper's "x* is fixed once at partition time and reused
+    at runtime" semantics: when evaluating whether a target processor can
+    absorb a migrated LC task, both the HI-mode condition (Eq. 7) and the
+    tightened LO-mode condition (Eq. 11) are evaluated at the SAME x_star
+    that MBP established for that processor, even though admitting the task
+    would in principle change U_LC_A on the target.
+    """
+    if x_star is None or x_star <= 0.0:
+        return False
+    # HI-mode condition (Eq. 7) at fixed x_star, with augmented utilizations
+    if x_star * U_LC_A + (1.0 - x_star) * U_LC_D + U_HC_H > 1.0:
+        return False
+    # LO-mode condition (Eq. 11) at fixed x_star, with augmented utilizations
+    lo_sum = U_LC_A
+    for (u_l, u_h) in hc_tasks:
+        if u_l / x_star >= u_h:
+            lo_sum += u_h
+        else:
+            lo_sum += u_l / x_star
+    return lo_sum <= 1.0
 
 class Processor:
     def __init__(self, proc_id, sched_func):
         self.id = proc_id
         self._sched_func = sched_func
-        self.fixed_x = None  # 오프라인 파티셔닝 완료 후 고정될 x 계수
         self.U_LC_A = 0.0
         self.U_HC_L = 0.0
         self.U_LC_D = 0.0
@@ -65,6 +79,10 @@ class Processor:
         self.mode = "LO"
         self.ready_queue = []
         self.running_job = None
+        # Offline-frozen coefficient. Set by partition_ffd_new() once MBP/FFD
+        # terminates, and reused as-is by the runtime migration admission test
+        # (try_add_fixed_x). NOT recomputed at runtime.
+        self.x_star = None
 
     def try_add(self, task: dict) -> bool:
         if task["crit"] == "HC":
@@ -79,9 +97,32 @@ class Processor:
             new_U_HC_L, new_U_HC_H = self.U_HC_L, self.U_HC_H
             new_hc = self.hc_tasks
             new_lc = self.lc_tasks + [(task["u_LO"], task["u_HI"])]
-        
-        # 런타임 중이라면 고정된 self.fixed_x를 넘겨 재계산을 방지함
-        return self._sched_func(new_U_LC_A, new_U_HC_L, new_U_LC_D, new_U_HC_H, new_hc, new_lc, self.fixed_x)
+        return self._sched_func(new_U_LC_A, new_U_HC_L, new_U_LC_D, new_U_HC_H, new_hc, new_lc)
+
+    def try_add_fixed_x(self, task: dict) -> bool:
+        """Runtime migration admission test at this processor's offline-frozen
+        x_star. Mirrors try_add() in that it returns True iff augmenting this
+        processor's task set with `task` keeps the EDF-VD-IMC test satisfied,
+        but uses self.x_star (frozen at partition time) rather than recomputing
+        x_max from the augmented utilizations.
+
+        In this paper, migration relocates only LC tasks; the HC branch is
+        included for completeness so the method has the same shape as try_add.
+        """
+        if self.x_star is None:
+            return False
+        if task["crit"] == "HC":
+            new_U_LC_A, new_U_LC_D = self.U_LC_A, self.U_LC_D
+            new_U_HC_H = self.U_HC_H + task["u_HI"]
+            new_hc = self.hc_tasks + [(task["u_LO"], task["u_HI"])]
+        else:
+            new_U_LC_A = self.U_LC_A + task["u_LO"]
+            new_U_LC_D = self.U_LC_D + task["u_HI"]
+            new_U_HC_H = self.U_HC_H
+            new_hc = self.hc_tasks
+        return is_schedulable_fixed_x(
+            self.x_star, new_U_LC_A, new_U_LC_D, new_U_HC_H, new_hc
+        )
 
     def add(self, task: dict):
         if task["crit"] == "HC":
@@ -108,7 +149,6 @@ class Processor:
 def partition_ffd_new(tasks, m):
     sorted_tasks = sorted(tasks, key=lambda t: max(t["u_LO"], t["u_HI"]), reverse=True)
     procs = [Processor(i, is_schedulable_new) for i in range(m)]
-    
     for task in sorted_tasks:
         placed = False
         for p in procs:
@@ -118,13 +158,12 @@ def partition_ffd_new(tasks, m):
                 break
         if not placed:
             return None
-            
-    # 파티셔닝이 모두 완료된 후, 논문 명세에 따라 각 코어의 x를 고정함
+    # Freeze the offline EDF-VD coefficient x_star on each processor.
+    # This value is reused as-is by the runtime migration admission check
+    # (try_add_fixed_x) and is never recomputed at runtime, matching the
+    # paper's "x* fixed at partition time" semantics.
     for p in procs:
-        p.fixed_x = compute_x_max(p.U_LC_A, p.U_LC_D, p.U_HC_H)
-        if p.fixed_x is None:
-            p.fixed_x = 1.0  # degenerate edge case 대응
-            
+        p.x_star = compute_x_max(p.U_LC_A, p.U_LC_D, p.U_HC_H)
     return procs
 
 def make_inflated_view(task, alpha):
@@ -214,6 +253,7 @@ def run_simulation(base_tasks, m, sim_ticks, mig_mode, switch_prob=0.20, mig_alp
                             p.add(t)
                             t["current_proc"] = p
                             
+                            # [버그 수정] 임시 코어에 남아있던 Job들을 싹 회수해옴
                             mv = [j for j in old_p.ready_queue if j["task"]["id"] == t["id"]]
                             old_p.ready_queue = [j for j in old_p.ready_queue if j["task"]["id"] != t["id"]]
                             p.ready_queue.extend(mv)
@@ -238,33 +278,40 @@ def run_simulation(base_tasks, m, sim_ticks, mig_mode, switch_prob=0.20, mig_alp
                             )
 
                             for lc in candidates:
+                                # off 모드거나, 이미 1번 마이그레이션 한 상태면 즉시 degrade
                                 if mig_mode == "off" or lc["migrated_once"]:
                                     _degrade(p, lc, deg_ref)
                                     continue
 
+                                # 마이그레이션 시도 (mig_rec, mig_norec 공통)
+                                # 기존 코드의 마이그레이션 시도(migrated = False) 부분부터 아래 코드로 교체
                                 migrated = False
                                 # Admission Test: 마이그레이션 직후의 일회성 오버헤드를 감당할 수 있는지 보수적으로 검사
                                 check = make_inflated_view(lc, mig_alpha) if mig_alpha > 0.0 else lc
 
                                 for tp in procs:
-                                    # 고정된 target의 x값을 바탕으로 검증이 이루어지게 됨 (try_add 내에서 처리)
-                                    if tp != p and tp.mode == "LO" and tp.try_add(check):
+                                    # Runtime migration admission test at the
+                                    # target processor's OFFLINE-FROZEN x_star
+                                    # (try_add_fixed_x), per the paper's
+                                    # "x* fixed at partition time" semantics.
+                                    if tp != p and tp.mode == "LO" and tp.try_add_fixed_x(check):
                                         p.remove(lc)
                                         
-                                        # [중대한 수학적 무결성 수정]
-                                        # EDF 이용률 기반 Schedulability Test의 무결성을 지키기 위해,
-                                        # Admission Test를 통과한 부풀려진 밀도를 타겟 코어에서도 그대로 유지해야 합니다.
-                                        # 회수(Recovery) 전까지 해당 페널티는 타겟 코어의 여유 용량(U_LC_A)을 영구적으로 점유합니다.
-                                        lc["u_LO"] = check["u_LO"]
-                                        lc["c_LO"] = check["c_LO"]
+                                        # [버그 수정 핵심] 
+                                        # 마이그레이션 타겟 코어에 태스크를 추가할 때, u_LO와 c_LO를 영구적으로 부풀리지 않음.
+                                        # 새 코어에 정착한 이후 새로 릴리즈되는 Job들은 캐시 워밍 페널티가 없어야 함.
+                                        lc["u_LO"] = lc["orig_u_LO"]
+                                        lc["c_LO"] = lc["orig_c_LO"]
                                         
                                         tp.add(lc)
                                         lc["current_proc"] = tp
                                         lc["migrated_once"] = True 
 
+                                        # 기존 코어에 있던 Pending Job들을 회수
                                         mv = [j for j in p.ready_queue if j["task"]["id"] == lc["id"]]
                                         p.ready_queue = [j for j in p.ready_queue if j["task"]["id"] != lc["id"]]
                                         
+                                        # 현재 실행 중이거나 대기 중이던 Job이 이사갈 때만 일회성 물리 오버헤드 부여
                                         if mig_alpha > 0.0:
                                             for j in mv:
                                                 if j["rem_LO"] > 0:
@@ -330,8 +377,8 @@ def main():
     m_values = [2, 4, 8]
     data_dir = "/Users/jaewoo/data/com/data"
     result_dir = "/Users/jaewoo/data/com"
-    max_sets = 1000
     # max_sets = 100
+    max_sets = 1000
     sim_ticks = 10000
     
     # ---- Fig5: vary target utilization ----
